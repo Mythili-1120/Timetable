@@ -9,13 +9,98 @@ let cachedStaff: Staff[] | null = null;
 let staffCacheTime = 0;
 let cachedLinks: StaffDepartmentLink[] | null = null;
 let linksCacheTime = 0;
-const CACHE_TTL_MS = 15000;
+const CACHE_TTL_MS = 60000; // 60 seconds (revalidated on mutation or expiration)
 
 export function invalidateStaffCache() {
   cachedStaff = null;
   staffCacheTime = 0;
   cachedLinks = null;
   linksCacheTime = 0;
+}
+
+export function getCachedStaff(): Staff[] | null {
+  if (cachedStaff && (Date.now() - staffCacheTime < CACHE_TTL_MS)) {
+    return cachedStaff;
+  }
+  return null;
+}
+
+export function getCachedStaffDepartmentLinks(): StaffDepartmentLink[] | null {
+  if (cachedLinks && (Date.now() - linksCacheTime < CACHE_TTL_MS)) {
+    return cachedLinks;
+  }
+  return null;
+}
+
+export function getCachedStaffDepartmentMap(): Map<string, string[]> | null {
+  const staff = getCachedStaff();
+  const links = getCachedStaffDepartmentLinks();
+  if (!staff || !links) return null;
+
+  const map = new Map<string, Set<string>>();
+  staff.forEach(s => {
+    if (!map.has(s.memberId)) map.set(s.memberId, new Set<string>());
+    if (s.primaryDepartmentId) map.get(s.memberId)!.add(s.primaryDepartmentId);
+  });
+  links.forEach(link => {
+    if (link.status === 'ACTIVE') {
+      if (!map.has(link.memberId)) map.set(link.memberId, new Set<string>());
+      map.get(link.memberId)!.add(link.departmentId);
+    }
+  });
+
+  const resultMap = new Map<string, string[]>();
+  map.forEach((deptSet, memberId) => {
+    resultMap.set(memberId, Array.from(deptSet));
+  });
+  return resultMap;
+}
+
+export function getCachedDepartmentStaffCounts(options?: { activeOnly?: boolean }): Map<string, number> | null {
+  const allStaff = getCachedStaff();
+  const allLinks = getCachedStaffDepartmentLinks();
+  if (!allStaff || !allLinks) return null;
+
+  const activeOnly = options?.activeOnly ?? true;
+  const counts = new Map<string, Set<string>>();
+
+  allStaff.forEach(s => {
+    if (activeOnly && s.status !== 'ACTIVE') return;
+    if (s.primaryDepartmentId) {
+      if (!counts.has(s.primaryDepartmentId)) {
+        counts.set(s.primaryDepartmentId, new Set<string>());
+      }
+      counts.get(s.primaryDepartmentId)!.add(s.memberId);
+    }
+  });
+
+  const activeStaffIds = new Set(allStaff.filter(s => !activeOnly || s.status === 'ACTIVE').map(s => s.memberId));
+  allLinks.forEach(link => {
+    if ((!activeOnly || link.status === 'ACTIVE') && activeStaffIds.has(link.memberId)) {
+      if (!counts.has(link.departmentId)) {
+        counts.set(link.departmentId, new Set<string>());
+      }
+      counts.get(link.departmentId)!.add(link.memberId);
+    }
+  });
+
+  const resultMap = new Map<string, number>();
+  counts.forEach((membersSet, deptId) => {
+    resultMap.set(deptId, membersSet.size);
+  });
+  return resultMap;
+}
+
+export function getCachedGlobalStaffCounts(): { total: number; active: number; archived: number } | null {
+  const staff = getCachedStaff();
+  if (!staff) return null;
+  let active = 0;
+  let archived = 0;
+  staff.forEach(s => {
+    if (s.status === 'ACTIVE') active++;
+    else archived++;
+  });
+  return { total: staff.length, active, archived };
 }
 
 /**
@@ -34,7 +119,7 @@ export async function getAllStaff(forceRefresh = false): Promise<Staff[]> {
     return result;
   } catch (err) {
     console.error('Error fetching staff:', err);
-    return [];
+    return cachedStaff || [];
   }
 }
 
@@ -54,7 +139,7 @@ export async function getAllStaffDepartmentLinks(forceRefresh = false): Promise<
     return result;
   } catch (err) {
     console.error('Error fetching staff department links:', err);
-    return [];
+    return cachedLinks || [];
   }
 }
 
@@ -62,6 +147,12 @@ export async function getAllStaffDepartmentLinks(forceRefresh = false): Promise<
  * Retrieves a single staff member by immutable Member ID.
  */
 export async function getStaffById(memberId: string): Promise<Staff | null> {
+  // Check memory cache first
+  if (cachedStaff && (Date.now() - staffCacheTime < CACHE_TTL_MS)) {
+    const found = cachedStaff.find(s => s.memberId === memberId);
+    if (found) return found;
+  }
+
   try {
     const snap = await getDoc(doc(db, 'staff', memberId));
     if (snap.exists()) {

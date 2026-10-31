@@ -1,11 +1,16 @@
 'use client';
 
-import React from 'react';
+import React, { useEffect } from 'react';
 import AdminGuard from '../../components/AdminGuard';
 import Sidebar from '../../components/Sidebar';
 import Navbar from '../../components/Navbar';
+import { prewarmCoreData } from '../../lib/services/prewarmService';
 
 export default function DashboardLayout({ children }: { children: React.ReactNode }) {
+  useEffect(() => {
+    prewarmCoreData();
+  }, []);
+
   return (
     <AdminGuard>
       <div className="flex h-screen overflow-hidden bg-[#F4F5FB] font-sans">

@@ -26,11 +26,18 @@ export const DEFAULT_SETTINGS: CollegeSettings = {
 
 let cachedSettings: CollegeSettings | null = null;
 let cacheTime = 0;
-const CACHE_TTL_MS = 30000; // 30 seconds
+const CACHE_TTL_MS = 60000; // 60 seconds
 
 export function invalidateSettingsCache() {
   cachedSettings = null;
   cacheTime = 0;
+}
+
+export function getCachedCollegeSettings(): CollegeSettings | null {
+  if (cachedSettings && (Date.now() - cacheTime < CACHE_TTL_MS)) {
+    return cachedSettings;
+  }
+  return null;
 }
 
 export async function getCollegeSettings(forceRefresh = false): Promise<CollegeSettings> {

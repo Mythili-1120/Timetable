@@ -5,21 +5,69 @@ import { logAdminAction } from './auditService';
 
 let cachedSubjects: Subject[] | null = null;
 let cacheTime = 0;
-const CACHE_TTL_MS = 15000;
+const CACHE_TTL_MS = 60000; // 60 seconds (revalidated on mutation or expiration)
 
 export function invalidateSubjectCache() {
   cachedSubjects = null;
   cacheTime = 0;
 }
 
+export function getCachedSubjects(departmentId?: string): Subject[] | null {
+  if (cachedSubjects && (Date.now() - cacheTime < CACHE_TTL_MS)) {
+    if (departmentId) {
+      return cachedSubjects.filter(s => s.departmentId === departmentId);
+    }
+    return cachedSubjects;
+  }
+  return null;
+}
+
+export function getCachedDepartmentSubjectCounts(
+  options: { activeOnly?: boolean } = { activeOnly: true }
+): Map<string, number> | null {
+  const allSubjs = getCachedSubjects();
+  if (!allSubjs) return null;
+  const activeOnly = options.activeOnly !== false;
+  const map = new Map<string, number>();
+  allSubjs.forEach(s => {
+    if (activeOnly && s.status !== 'ACTIVE') return;
+    map.set(s.departmentId, (map.get(s.departmentId) || 0) + 1);
+  });
+  return map;
+}
+
+export function getCachedGlobalSubjectCounts(): {
+  total: number;
+  active: number;
+  theory: number;
+  lab: number;
+} | null {
+  const allSubjs = getCachedSubjects();
+  if (!allSubjs) return null;
+  let active = 0;
+  let theory = 0;
+  let lab = 0;
+  allSubjs.forEach(s => {
+    if (s.status === 'ACTIVE') {
+      active++;
+      if (s.type === 'Lab') lab++;
+      else theory++;
+    }
+  });
+  return { total: allSubjs.length, active, theory, lab };
+}
+
 export async function getAllSubjects(departmentId?: string, forceRefresh = false): Promise<Subject[]> {
-  if (!forceRefresh && !departmentId && cachedSubjects && (Date.now() - cacheTime < CACHE_TTL_MS)) {
+  if (!forceRefresh && cachedSubjects && (Date.now() - cacheTime < CACHE_TTL_MS)) {
+    if (departmentId) {
+      return cachedSubjects.filter(s => s.departmentId === departmentId);
+    }
     return cachedSubjects;
   }
 
   try {
     let q = query(collection(db, 'subjects'));
-    if (departmentId) {
+    if (departmentId && (!cachedSubjects || forceRefresh)) {
       q = query(collection(db, 'subjects'), where('departmentId', '==', departmentId));
     }
     const snap = await getDocs(q);
@@ -31,7 +79,7 @@ export async function getAllSubjects(departmentId?: string, forceRefresh = false
     return result;
   } catch (err) {
     console.error('Error fetching subjects:', err);
-    return [];
+    return cachedSubjects ? (departmentId ? cachedSubjects.filter(s => s.departmentId === departmentId) : cachedSubjects) : [];
   }
 }
 

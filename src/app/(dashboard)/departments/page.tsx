@@ -4,12 +4,19 @@ import React, { useEffect, useState } from 'react';
 import Link from 'next/link';
 import {
   getAllDepartments,
+  getCachedDepartments,
   createDepartment,
   updateDepartment,
   archiveDepartment
 } from '../../../lib/services/departmentService';
-import { getAllDepartmentStaffCounts } from '../../../lib/services/staffService';
-import { getAllDepartmentSubjectCounts } from '../../../lib/services/subjectService';
+import {
+  getAllDepartmentStaffCounts,
+  getCachedDepartmentStaffCounts
+} from '../../../lib/services/staffService';
+import {
+  getAllDepartmentSubjectCounts,
+  getCachedDepartmentSubjectCounts
+} from '../../../lib/services/subjectService';
 import { Department } from '../../../types';
 import { useAuth } from '../../../lib/context/AuthContext';
 import {
@@ -29,10 +36,15 @@ import {
 } from 'lucide-react';
 
 export default function DepartmentsPage() {
-  const [departments, setDepartments] = useState<Department[]>([]);
-  const [deptStaffCounts, setDeptStaffCounts] = useState<Map<string, number>>(new Map());
-  const [deptSubjectCounts, setDeptSubjectCounts] = useState<Map<string, number>>(new Map());
-  const [loading, setLoading] = useState(true);
+  // Synchronous cache access: instant 0ms initial render if data was already loaded
+  const initialDepts = getCachedDepartments();
+  const initialStaffCounts = getCachedDepartmentStaffCounts({ activeOnly: true });
+  const initialSubjCounts = getCachedDepartmentSubjectCounts({ activeOnly: true });
+
+  const [departments, setDepartments] = useState<Department[]>(() => initialDepts || []);
+  const [deptStaffCounts, setDeptStaffCounts] = useState<Map<string, number>>(() => initialStaffCounts || new Map());
+  const [deptSubjectCounts, setDeptSubjectCounts] = useState<Map<string, number>>(() => initialSubjCounts || new Map());
+  const [loading, setLoading] = useState(() => !initialDepts);
 
   // Search & Filter state
   const [search, setSearch] = useState('');
@@ -49,13 +61,16 @@ export default function DepartmentsPage() {
 
   const { user } = useAuth();
 
-  const loadData = async () => {
-    setLoading(true);
+  const loadData = async (forceRefresh = false) => {
+    // Only show loading skeleton if we have no data at all
+    if (departments.length === 0 && !getCachedDepartments()) {
+      setLoading(true);
+    }
     try {
       const [deptData, stCounts, subCounts] = await Promise.all([
-        getAllDepartments(true),
-        getAllDepartmentStaffCounts({ activeOnly: true, forceRefresh: true }),
-        getAllDepartmentSubjectCounts({ activeOnly: true, forceRefresh: true })
+        getAllDepartments(forceRefresh),
+        getAllDepartmentStaffCounts({ activeOnly: true, forceRefresh }),
+        getAllDepartmentSubjectCounts({ activeOnly: true, forceRefresh })
       ]);
       setDepartments(deptData);
       setDeptStaffCounts(stCounts);
@@ -68,7 +83,7 @@ export default function DepartmentsPage() {
   };
 
   useEffect(() => {
-    loadData();
+    loadData(false);
   }, []);
 
   const handleSave = async (e: React.FormEvent) => {
@@ -111,7 +126,7 @@ export default function DepartmentsPage() {
       setDescription('');
       setEditingDept(null);
       setModalOpen(false);
-      await loadData();
+      await loadData(true);
     } catch (err: any) {
       console.error('Error saving department:', err);
       setError(err?.message || 'Failed to save department.');
@@ -129,11 +144,11 @@ export default function DepartmentsPage() {
       if (dept.status === 'ACTIVE') {
         if (confirm(`Archive ${dept.name}? Historical timetable references will be safely preserved.`)) {
           await archiveDepartment(dept.departmentId, user.uid);
-          await loadData();
+          await loadData(true);
         }
       } else {
         await updateDepartment(dept.departmentId, { status: 'ACTIVE' }, user.uid);
-        await loadData();
+        await loadData(true);
       }
     } catch (err: any) {
       alert(`Error updating department status: ${err?.message || 'Permission denied'}`);

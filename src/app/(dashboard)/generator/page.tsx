@@ -1,12 +1,12 @@
 'use client';
 
 import React, { useEffect, useState } from 'react';
-import { getAllDepartments } from '../../../lib/services/departmentService';
-import { getAllClasses } from '../../../lib/services/classService';
+import { getAllDepartments, getCachedDepartments } from '../../../lib/services/departmentService';
+import { getAllClasses, getCachedClasses } from '../../../lib/services/classService';
 import { getAssignments, getSemestersForYear } from '../../../lib/services/assignmentService';
-import { getAllSubjects } from '../../../lib/services/subjectService';
-import { getAllStaff } from '../../../lib/services/staffService';
-import { getCollegeSettings } from '../../../lib/services/settingsService';
+import { getAllSubjects, getCachedSubjects } from '../../../lib/services/subjectService';
+import { getAllStaff, getCachedStaff } from '../../../lib/services/staffService';
+import { getCollegeSettings, getCachedCollegeSettings } from '../../../lib/services/settingsService';
 import {
   saveDraft,
   getDraft,
@@ -27,15 +27,30 @@ import { useAuth } from '../../../lib/context/AuthContext';
 import { Cpu, Lock, Save, AlertTriangle, CheckCircle2, RotateCcw } from 'lucide-react';
 
 export default function GeneratorPage() {
-  const [departments, setDepartments] = useState<Department[]>([]);
-  const [classes, setClasses] = useState<ClassSection[]>([]);
-  const [subjectsMap, setSubjectsMap] = useState<Map<string, Subject>>(new Map());
-  const [staffMap, setStaffMap] = useState<Map<string, Staff>>(new Map());
-  const [settings, setSettings] = useState<CollegeSettings | null>(null);
+  const initDepts = getCachedDepartments();
+  const initSubjs = getCachedSubjects();
+  const initStaff = getCachedStaff();
+  const initSettings = getCachedCollegeSettings();
+  const firstDeptId = initDepts && initDepts.length > 0 ? initDepts[0].departmentId : '';
+  const initClasses = firstDeptId ? getCachedClasses(firstDeptId) || [] : [];
+
+  const [departments, setDepartments] = useState<Department[]>(() => initDepts || []);
+  const [classes, setClasses] = useState<ClassSection[]>(() => initClasses);
+  const [subjectsMap, setSubjectsMap] = useState<Map<string, Subject>>(() => {
+    const sMap = new Map<string, Subject>();
+    if (initSubjs) initSubjs.forEach(s => sMap.set(s.subjectId, s));
+    return sMap;
+  });
+  const [staffMap, setStaffMap] = useState<Map<string, Staff>>(() => {
+    const stMap = new Map<string, Staff>();
+    if (initStaff) initStaff.forEach(st => stMap.set(st.memberId, st));
+    return stMap;
+  });
+  const [settings, setSettings] = useState<CollegeSettings | null>(() => initSettings);
 
   // Form selections
-  const [selectedDept, setSelectedDept] = useState('');
-  const [selectedClassId, setSelectedClassId] = useState('');
+  const [selectedDept, setSelectedDept] = useState(firstDeptId);
+  const [selectedClassId, setSelectedClassId] = useState(() => (initClasses.length > 0 ? initClasses[0].classId : ''));
   const [selectedSemester, setSelectedSemester] = useState('ALL');
   const [academicYear, setAcademicYear] = useState('2025–2026');
 
@@ -68,9 +83,10 @@ export default function GeneratorPage() {
       staffList.forEach(st => stMap.set(st.memberId, st));
       setStaffMap(stMap);
 
-      if (depts.length > 0) {
-        setSelectedDept(depts[0].departmentId);
-        await loadClassesForDept(depts[0].departmentId);
+      const targetDept = selectedDept || (depts.length > 0 ? depts[0].departmentId : '');
+      if (targetDept) {
+        if (!selectedDept) setSelectedDept(targetDept);
+        await loadClassesForDept(targetDept);
       }
     }
     init();

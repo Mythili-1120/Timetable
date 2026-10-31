@@ -1,24 +1,29 @@
 'use client';
 
 import React, { useEffect, useState } from 'react';
-import { getAllStaff } from '../../../lib/services/staffService';
-import { getAllDepartments } from '../../../lib/services/departmentService';
-import { getAllClasses } from '../../../lib/services/classService';
-import { getPublishedTimetables, getStaffSchedule } from '../../../lib/services/timetableService';
-import { getCollegeSettings } from '../../../lib/services/settingsService';
+import { getAllStaff, getCachedStaff } from '../../../lib/services/staffService';
+import { getAllDepartments, getCachedDepartments } from '../../../lib/services/departmentService';
+import { getAllClasses, getCachedClasses } from '../../../lib/services/classService';
+import { getPublishedTimetables, getCachedPublishedTimetables, getStaffSchedule } from '../../../lib/services/timetableService';
+import { getCollegeSettings, getCachedCollegeSettings } from '../../../lib/services/settingsService';
 import { Staff, Department, ClassSection, PublishedTimetable, CollegeSettings, TimetableSlot } from '../../../types';
 import { Printer, UserCheck, CalendarDays, BookOpen, Clock, Building, GraduationCap } from 'lucide-react';
 
 export default function TimetableViewsPage() {
+  const initStaff = getCachedStaff();
+  const initDepts = getCachedDepartments();
+  const initPub = getCachedPublishedTimetables('2025–2026');
+  const initSettings = getCachedCollegeSettings();
+
   const [activeTab, setActiveTab] = useState<'staff' | 'class'>('staff');
 
   // Shared master data
-  const [settings, setSettings] = useState<CollegeSettings | null>(null);
-  const [loading, setLoading] = useState(true);
+  const [settings, setSettings] = useState<CollegeSettings | null>(() => initSettings);
+  const [loading, setLoading] = useState(() => !initStaff || !initDepts);
 
   // Staff Timetable state
-  const [staffList, setStaffList] = useState<Staff[]>([]);
-  const [selectedMemberId, setSelectedMemberId] = useState('');
+  const [staffList, setStaffList] = useState<Staff[]>(() => initStaff || []);
+  const [selectedMemberId, setSelectedMemberId] = useState(() => (initStaff && initStaff.length > 0 ? initStaff[0].memberId : ''));
   const [staffSchedule, setStaffSchedule] = useState<{
     memberId: string;
     grid: (TimetableSlot | null)[][];
@@ -27,15 +32,17 @@ export default function TimetableViewsPage() {
   } | null>(null);
 
   // Class Timetable state
-  const [departments, setDepartments] = useState<Department[]>([]);
-  const [classes, setClasses] = useState<ClassSection[]>([]);
-  const [publishedList, setPublishedList] = useState<PublishedTimetable[]>([]);
-  const [selectedDept, setSelectedDept] = useState('');
+  const [departments, setDepartments] = useState<Department[]>(() => initDepts || []);
+  const [classes, setClasses] = useState<ClassSection[]>(() => (initDepts && initDepts.length > 0 ? getCachedClasses(initDepts[0].departmentId) || [] : []));
+  const [publishedList, setPublishedList] = useState<PublishedTimetable[]>(() => initPub || []);
+  const [selectedDept, setSelectedDept] = useState(() => (initDepts && initDepts.length > 0 ? initDepts[0].departmentId : ''));
   const [selectedClassId, setSelectedClassId] = useState('');
 
   useEffect(() => {
     async function loadInitial() {
-      setLoading(true);
+      if (!initStaff || !initDepts) {
+        setLoading(true);
+      }
       try {
         const [st, deptList, pub, set] = await Promise.all([
           getAllStaff(),
@@ -48,17 +55,26 @@ export default function TimetableViewsPage() {
         setPublishedList(pub);
         setSettings(set);
 
-        if (st.length > 0) {
-          setSelectedMemberId(st[0].memberId);
-          const sched = await getStaffSchedule(st[0].memberId, '2025–2026');
-          setStaffSchedule(sched);
+        const targetMemberId = selectedMemberId || (st.length > 0 ? st[0].memberId : '');
+        const targetDeptId = selectedDept || (deptList.length > 0 ? deptList[0].departmentId : '');
+
+        if (targetMemberId) {
+          setSelectedMemberId(targetMemberId);
+        }
+        if (targetDeptId) {
+          setSelectedDept(targetDeptId);
         }
 
-        if (deptList.length > 0) {
-          setSelectedDept(deptList[0].departmentId);
-          const cls = await getAllClasses(deptList[0].departmentId);
+        // Parallelize second-tier queries
+        const [sched, cls] = await Promise.all([
+          targetMemberId ? getStaffSchedule(targetMemberId, '2025–2026') : Promise.resolve(null),
+          targetDeptId ? getAllClasses(targetDeptId) : Promise.resolve([])
+        ]);
+
+        if (sched) setStaffSchedule(sched);
+        if (cls) {
           setClasses(cls);
-          if (cls.length > 0) {
+          if (cls.length > 0 && !selectedClassId) {
             setSelectedClassId(cls[0].classId);
           }
         }

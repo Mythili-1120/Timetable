@@ -3,23 +3,32 @@
 import React, { useEffect, useState } from 'react';
 import {
   getAllStaff,
+  getCachedStaff,
   createStaff,
   updateStaff,
   archiveStaff,
   linkStaffToDepartment,
   unlinkStaffFromDepartment,
-  getAllStaffDepartmentMap
+  getAllStaffDepartmentMap,
+  getCachedStaffDepartmentMap
 } from '../../../lib/services/staffService';
-import { getAllDepartments } from '../../../lib/services/departmentService';
+import {
+  getAllDepartments,
+  getCachedDepartments
+} from '../../../lib/services/departmentService';
 import { Staff, Department } from '../../../types';
 import { useAuth } from '../../../lib/context/AuthContext';
 import { Users, Plus, Edit2, Archive, CheckCircle2, XCircle, Search, Link as LinkIcon, Building } from 'lucide-react';
 
 export default function StaffPage() {
-  const [staffList, setStaffList] = useState<Staff[]>([]);
-  const [departments, setDepartments] = useState<Department[]>([]);
-  const [staffDeptMap, setStaffDeptMap] = useState<Map<string, string[]>>(new Map());
-  const [loading, setLoading] = useState(true);
+  const initialStaff = getCachedStaff();
+  const initialDepts = getCachedDepartments();
+  const initialDeptMap = getCachedStaffDepartmentMap();
+
+  const [staffList, setStaffList] = useState<Staff[]>(() => initialStaff || []);
+  const [departments, setDepartments] = useState<Department[]>(() => initialDepts || []);
+  const [staffDeptMap, setStaffDeptMap] = useState<Map<string, string[]>>(() => initialDeptMap || new Map());
+  const [loading, setLoading] = useState(() => !initialStaff);
   const [search, setSearch] = useState('');
   const [deptFilter, setDeptFilter] = useState('ALL');
 
@@ -31,7 +40,7 @@ export default function StaffPage() {
   const [email, setEmail] = useState('');
   const [phone, setPhone] = useState('');
   const [designation, setDesignation] = useState('Assistant Professor');
-  const [primaryDept, setPrimaryDept] = useState('');
+  const [primaryDept, setPrimaryDept] = useState(() => (initialDepts && initialDepts.length > 0 ? initialDepts[0].departmentId : ''));
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -42,13 +51,15 @@ export default function StaffPage() {
 
   const { user } = useAuth();
 
-  const loadData = async () => {
-    setLoading(true);
+  const loadData = async (forceRefresh = false) => {
+    if (staffList.length === 0 && !getCachedStaff()) {
+      setLoading(true);
+    }
     try {
       const [s, d, deptMap] = await Promise.all([
-        getAllStaff(true),
-        getAllDepartments(true),
-        getAllStaffDepartmentMap(true)
+        getAllStaff(forceRefresh),
+        getAllDepartments(forceRefresh),
+        getAllStaffDepartmentMap(forceRefresh)
       ]);
       setStaffList(s);
       setDepartments(d);
@@ -62,7 +73,7 @@ export default function StaffPage() {
   };
 
   useEffect(() => {
-    loadData();
+    loadData(false);
   }, []);
 
   const handleSave = async (e: React.FormEvent) => {
@@ -110,7 +121,7 @@ export default function StaffPage() {
       setEmail('');
       setPhone('');
       setModalOpen(false);
-      await loadData();
+      await loadData(true);
     } catch (err: any) {
       console.error('Error saving staff:', err);
       setError(err?.message || 'Failed to save staff record. Check Firebase permissions.');
@@ -125,11 +136,11 @@ export default function StaffPage() {
       if (member.status === 'ACTIVE') {
         if (confirm(`Deactivate staff member ${member.displayName} (${member.memberId})? Historical timetables will remain permanently intact.`)) {
           await archiveStaff(member.memberId, user.uid);
-          await loadData();
+          await loadData(true);
         }
       } else {
         await updateStaff(member.memberId, { status: 'ACTIVE' }, user.uid);
-        await loadData();
+        await loadData(true);
       }
     } catch (err: any) {
       alert(`Error updating staff status: ${err?.message || 'Permission denied'}`);
@@ -145,7 +156,7 @@ export default function StaffPage() {
       await linkStaffToDepartment(selectedStaffForLink.memberId, additionalDept, user.uid);
       alert(`Successfully linked ${selectedStaffForLink.displayName} to department!`);
       setLinkModalOpen(false);
-      await loadData();
+      await loadData(true);
     } catch (err: any) {
       alert(`Failed to link department: ${err?.message || 'Permission denied'}`);
     } finally {

@@ -61,21 +61,75 @@ export function validateAssignmentInput(data: {
   return { isValid: true };
 }
 
-export async function getAssignments(
+// In-memory cache for fast responsive navigation
+let cachedAssignments: TeachingAssignment[] | null = null;
+let assignmentCacheTime = 0;
+const CACHE_TTL_MS = 60000; // 60 seconds (revalidated on mutation or expiration)
+
+export function invalidateAssignmentCache() {
+  cachedAssignments = null;
+  assignmentCacheTime = 0;
+}
+
+export function getCachedAssignments(
   filters?: { departmentId?: string; classId?: string; memberId?: string; semester?: string; academicYear?: string }
+): TeachingAssignment[] | null {
+  if (cachedAssignments && (Date.now() - assignmentCacheTime < CACHE_TTL_MS)) {
+    let list = cachedAssignments;
+    if (filters?.departmentId) {
+      list = list.filter(a => a.departmentId === filters.departmentId);
+    }
+    if (filters?.classId) {
+      list = list.filter(a => a.classId === filters.classId);
+    }
+    if (filters?.memberId) {
+      list = list.filter(a => a.memberId === filters.memberId);
+    }
+    if (filters?.semester) {
+      list = list.filter(a => a.semester === filters.semester);
+    }
+    if (filters?.academicYear) {
+      list = list.filter(a => a.academicYear === filters.academicYear);
+    }
+    return list;
+  }
+  return null;
+}
+
+export async function getAssignments(
+  filters?: { departmentId?: string; classId?: string; memberId?: string; semester?: string; academicYear?: string },
+  forceRefresh = false
 ): Promise<TeachingAssignment[]> {
+  if (!forceRefresh && cachedAssignments && (Date.now() - assignmentCacheTime < CACHE_TTL_MS)) {
+    return getCachedAssignments(filters) || [];
+  }
+
   try {
     let q = query(collection(db, 'teachingAssignments'));
-    if (filters?.classId) {
+    if (!filters && (!cachedAssignments || forceRefresh)) {
+      // fetch all into cache
+      const snap = await getDocs(q);
+      const all = snap.docs.map(d => d.data() as TeachingAssignment);
+      cachedAssignments = all;
+      assignmentCacheTime = Date.now();
+      return all;
+    }
+
+    if (filters?.classId && (!cachedAssignments || forceRefresh)) {
       q = query(collection(db, 'teachingAssignments'), where('classId', '==', filters.classId));
-    } else if (filters?.departmentId) {
+    } else if (filters?.departmentId && (!cachedAssignments || forceRefresh)) {
       q = query(collection(db, 'teachingAssignments'), where('departmentId', '==', filters.departmentId));
-    } else if (filters?.memberId) {
+    } else if (filters?.memberId && (!cachedAssignments || forceRefresh)) {
       q = query(collection(db, 'teachingAssignments'), where('memberId', '==', filters.memberId));
     }
 
     const snap = await getDocs(q);
     let list = snap.docs.map(d => d.data() as TeachingAssignment);
+
+    if (!filters?.classId && !filters?.departmentId && !filters?.memberId) {
+      cachedAssignments = list;
+      assignmentCacheTime = Date.now();
+    }
 
     if (filters?.semester) {
       list = list.filter(a => a.semester === filters.semester);
@@ -87,7 +141,7 @@ export async function getAssignments(
     return list;
   } catch (err) {
     console.error('Error fetching teaching assignments:', err);
-    return [];
+    return cachedAssignments ? getCachedAssignments(filters) || [] : [];
   }
 }
 
@@ -132,12 +186,14 @@ export async function createAssignment(
   };
 
   await setDoc(doc(db, 'teachingAssignments', assignmentId), record);
+  invalidateAssignmentCache();
   await logAdminAction(adminUid, 'CREATE_ASSIGNMENT', 'teachingAssignments', assignmentId, record);
   return record;
 }
 
 export async function deleteAssignment(assignmentId: string, adminUid: string): Promise<void> {
   await deleteDoc(doc(db, 'teachingAssignments', assignmentId));
+  invalidateAssignmentCache();
   await logAdminAction(adminUid, 'DELETE_ASSIGNMENT', 'teachingAssignments', assignmentId);
 }
 
@@ -507,6 +563,7 @@ export async function reassignStaff(
     reassignedAt: now,
     updatedAt: now
   });
+  invalidateAssignmentCache();
 
   await logAdminAction(adminUid, 'REASSIGN_STAFF', 'teachingAssignments', assignmentId, {
     previousMemberId: oldMemberId,

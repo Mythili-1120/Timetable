@@ -3,28 +3,33 @@
 import React, { useEffect, useState } from 'react';
 import Link from 'next/link';
 import { useParams, useRouter } from 'next/navigation';
-import { getDepartmentById } from '../../../../lib/services/departmentService';
+import { getDepartmentById, getCachedDepartments } from '../../../../lib/services/departmentService';
 import {
   getAllStaff,
+  getCachedStaff,
   getStaffByDepartment,
   createStaff,
   updateStaff,
   archiveStaff,
-  linkStaffToDepartment
+  linkStaffToDepartment,
+  getCachedStaffDepartmentMap
 } from '../../../../lib/services/staffService';
 import {
   getAllSubjects,
+  getCachedSubjects,
   createSubject,
   updateSubject,
   archiveSubject
 } from '../../../../lib/services/subjectService';
 import {
   getAllClasses,
+  getCachedClasses,
   createClass,
   updateClass
 } from '../../../../lib/services/classService';
 import {
   getAssignments,
+  getCachedAssignments,
   createAssignment,
   deleteAssignment,
   reassignStaff,
@@ -59,7 +64,11 @@ import {
   ChevronRight,
   ShieldCheck,
   UserPlus,
-  ArrowRightLeft
+  ArrowRightLeft,
+  Check,
+  Lock,
+  Sparkles,
+  ArrowRight
 } from 'lucide-react';
 
 const UNDERGRADUATE_YEARS: ('1st Year' | '2nd Year' | '3rd Year' | '4th Year')[] = [
@@ -75,16 +84,31 @@ export default function DepartmentDetailPage() {
   const departmentId = typeof params.departmentId === 'string' ? params.departmentId : '';
   const { user } = useAuth();
 
+  // Instant SWR memory cache resolution
+  const cachedDepts = getCachedDepartments();
+  const initialDept = cachedDepts ? cachedDepts.find(d => d.departmentId === departmentId) || null : null;
+  const initialStaff = getCachedStaff() || [];
+  const initialSubjs = getCachedSubjects(departmentId) || [];
+  const initialClasses = getCachedClasses(departmentId) || [];
+  const initialAsgns = getCachedAssignments({ departmentId }) || [];
+
   const [activeTab, setActiveTab] = useState<'overview' | 'staff' | 'subjects' | 'years' | 'assignments'>('overview');
-  const [loading, setLoading] = useState(true);
+  const [loading, setLoading] = useState(() => !initialDept);
 
   // Master Data States
-  const [department, setDepartment] = useState<Department | null>(null);
-  const [deptStaff, setDeptStaff] = useState<Staff[]>([]);
-  const [allCollegeStaff, setAllCollegeStaff] = useState<Staff[]>([]);
-  const [subjects, setSubjects] = useState<Subject[]>([]);
-  const [classes, setClasses] = useState<ClassSection[]>([]);
-  const [assignments, setAssignments] = useState<TeachingAssignment[]>([]);
+  const [department, setDepartment] = useState<Department | null>(() => initialDept);
+  const [deptStaff, setDeptStaff] = useState<Staff[]>(() => {
+    if (!initialDept || initialStaff.length === 0) return [];
+    const deptMap = getCachedStaffDepartmentMap();
+    return initialStaff.filter(s => {
+      const depts = deptMap ? deptMap.get(s.memberId) || [] : (s.primaryDepartmentId ? [s.primaryDepartmentId] : []);
+      return depts.includes(departmentId) || s.primaryDepartmentId === departmentId;
+    });
+  });
+  const [allCollegeStaff, setAllCollegeStaff] = useState<Staff[]>(() => initialStaff);
+  const [subjects, setSubjects] = useState<Subject[]>(() => initialSubjs);
+  const [classes, setClasses] = useState<ClassSection[]>(() => initialClasses);
+  const [assignments, setAssignments] = useState<TeachingAssignment[]>(() => initialAsgns);
 
   // Search & Filters
   const [staffSearch, setStaffSearch] = useState('');
@@ -132,17 +156,19 @@ export default function DepartmentDetailPage() {
   const [saving, setSaving] = useState(false);
   const [modalError, setModalError] = useState<string | null>(null);
 
-  const loadAll = async () => {
+  const loadAll = async (forceRefresh = false) => {
     if (!departmentId) return;
-    setLoading(true);
+    if (!department && !getCachedDepartments()) {
+      setLoading(true);
+    }
     try {
       const [dept, dStaff, allSt, subjs, cls, asgns] = await Promise.all([
         getDepartmentById(departmentId),
         getStaffByDepartment(departmentId),
-        getAllStaff(true),
-        getAllSubjects(departmentId, true),
-        getAllClasses(departmentId, undefined, true),
-        getAssignments({ departmentId })
+        getAllStaff(forceRefresh),
+        getAllSubjects(departmentId, forceRefresh),
+        getAllClasses(departmentId, undefined, forceRefresh),
+        getAssignments({ departmentId }, forceRefresh)
       ]);
 
       setDepartment(dept);
@@ -167,7 +193,7 @@ export default function DepartmentDetailPage() {
   };
 
   useEffect(() => {
-    loadAll();
+    loadAll(false);
   }, [departmentId]);
 
   // -------------------------------------------------------------
@@ -226,7 +252,7 @@ export default function DepartmentDetailPage() {
       setStaffEmail('');
       setStaffPhone('');
       setSelectedExistingStaffId('');
-      await loadAll();
+      await loadAll(true);
     } catch (err: any) {
       console.error('Error saving staff member:', err);
       setModalError(err?.message || 'Failed to save staff record.');
@@ -241,11 +267,11 @@ export default function DepartmentDetailPage() {
       if (member.status === 'ACTIVE') {
         if (confirm(`Deactivate ${member.displayName} (${member.memberId})? Historical timetables will remain intact.`)) {
           await archiveStaff(member.memberId, user.uid);
-          await loadAll();
+          await loadAll(true);
         }
       } else {
         await updateStaff(member.memberId, { status: 'ACTIVE' }, user.uid);
-        await loadAll();
+        await loadAll(true);
       }
     } catch (err: any) {
       alert(`Error updating staff: ${err?.message || 'Permission denied'}`);
@@ -301,7 +327,7 @@ export default function DepartmentDetailPage() {
       setSubjName('');
       setSubjHours(4);
       setSubjLabBlock(4);
-      await loadAll();
+      await loadAll(true);
     } catch (err: any) {
       console.error('Error saving subject:', err);
       setModalError(err?.message || 'Failed to save subject.');
@@ -316,11 +342,11 @@ export default function DepartmentDetailPage() {
       if (s.status === 'ACTIVE') {
         if (confirm(`Archive subject ${s.name} (${s.code})? Historical timetable references remain intact.`)) {
           await archiveSubject(s.subjectId, user.uid);
-          await loadAll();
+          await loadAll(true);
         }
       } else {
         await updateSubject(s.subjectId, { status: 'ACTIVE' }, user.uid);
-        await loadAll();
+        await loadAll(true);
       }
     } catch (err: any) {
       alert(`Error updating subject: ${err?.message || 'Permission denied'}`);
@@ -354,7 +380,7 @@ export default function DepartmentDetailPage() {
 
       setSectionModalOpen(false);
       setSecName('A');
-      await loadAll();
+      await loadAll(true);
     } catch (err: any) {
       console.error('Error saving section:', err);
       setModalError(err?.message || 'Failed to create section.');
@@ -391,7 +417,7 @@ export default function DepartmentDetailPage() {
       );
 
       setAssignModalOpen(false);
-      await loadAll();
+      await loadAll(true);
     } catch (err: any) {
       console.error('Error saving assignment:', err);
       setModalError(err?.message || 'Failed to create teaching assignment.');
@@ -405,7 +431,7 @@ export default function DepartmentDetailPage() {
     if (!confirm('Remove this teaching assignment?')) return;
     try {
       await deleteAssignment(asgnId, user.uid);
-      await loadAll();
+      await loadAll(true);
     } catch (err: any) {
       alert(`Error deleting assignment: ${err?.message || 'Permission denied'}`);
     }
@@ -429,7 +455,7 @@ export default function DepartmentDetailPage() {
       await reassignStaff(reassignTargetAsgn.assignmentId, reassignNewMemberId, user.uid);
       setReassignModalOpen(false);
       setReassignTargetAsgn(null);
-      await loadAll();
+      await loadAll(true);
     } catch (err: any) {
       console.error('Error reassigning faculty:', err);
       setModalError(err?.message || 'Failed to reassign faculty.');
@@ -494,294 +520,540 @@ export default function DepartmentDetailPage() {
 
   return (
     <div className="space-y-6">
-      {/* Breadcrumbs & Navigation */}
-      <div className="flex items-center justify-between no-print">
-        <Link
-          href="/departments"
-          className="inline-flex items-center gap-1.5 text-xs font-semibold text-slate-500 hover:text-brand-600 transition-colors"
-        >
-          <ArrowLeft className="w-4 h-4" />
-          <span>All Departments</span>
-        </Link>
-        <span className="font-mono text-xs font-semibold text-slate-400">
-          ID: {department.departmentId}
-        </span>
-      </div>
+      {/* 1. DEPARTMENT HERO BANNER — Royal Indigo Gradient (SSM Reference Design) */}
+      <div className="relative overflow-hidden rounded-2xl bg-gradient-to-r from-[#29229D] via-[#322BB7] to-[#3F35C8] p-6 sm:p-7 text-white shadow-sm">
+        {/* Top Header inside Banner: < All Departments link + ID & decorative indicators */}
+        <div className="flex items-center justify-between mb-4">
+          <Link
+            href="/departments"
+            className="inline-flex items-center gap-1.5 text-xs font-semibold text-white/80 hover:text-white transition-colors"
+          >
+            <ArrowLeft className="w-4 h-4" />
+            <span>All Departments</span>
+          </Link>
 
-      {/* Department Hero Banner */}
-      <div className="bg-white rounded-2xl border border-slate-200 p-6 shadow-xs flex flex-col md:flex-row md:items-center justify-between gap-6">
-        <div className="flex items-start gap-4">
-          <div className="w-14 h-14 rounded-2xl bg-gradient-to-br from-brand-600 to-brand-800 text-white flex items-center justify-center font-bold text-lg shadow-sm shrink-0">
-            {department.code}
+          <div className="flex items-center gap-2">
+            <div className="hidden md:flex items-center gap-1.5 opacity-60">
+              <div className="h-1.5 w-6 rounded-full bg-white/40" />
+              <div className="h-1.5 w-6 rounded-full bg-white/40" />
+              <div className="h-1.5 w-6 rounded-full bg-white/40" />
+              <div className="h-1.5 w-6 rounded-full bg-white/40" />
+              <div className="h-1.5 w-6 rounded-full bg-white/40" />
+            </div>
+            <span className="font-mono text-xs text-white/60">
+              ID: {department.departmentId}
+            </span>
           </div>
-          <div>
-            <div className="flex items-center gap-2">
-              <span className="font-mono text-xs font-bold text-brand-700 bg-brand-50 px-2.5 py-0.5 rounded-md border border-brand-200">
-                {department.code}
-              </span>
-              <span
-                className={`inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-xs font-semibold ${
-                  department.status === 'ACTIVE'
-                    ? 'bg-emerald-50 text-emerald-700 border border-emerald-200'
-                    : 'bg-slate-100 text-slate-500 border border-slate-200'
-                }`}
+        </div>
+
+        {/* Main Banner Row: Monogram, Title, Badges, and Action Buttons */}
+        <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-6 relative z-10">
+          <div className="flex items-start gap-4 min-w-0">
+            <div className="w-16 h-16 rounded-2xl bg-gradient-to-br from-[#3B34C4] to-[#251F91] text-white flex items-center justify-center font-extrabold text-base tracking-wider shadow-inner shrink-0">
+              {department.code.slice(0, 4)}
+            </div>
+
+            <div className="min-w-0">
+              <div className="flex flex-wrap items-center gap-2 mb-1">
+                <h1 className="text-2xl sm:text-3xl font-extrabold text-white tracking-tight">
+                  {department.name}
+                </h1>
+                <span className="font-mono text-xs font-bold text-white bg-white/20 px-2.5 py-0.5 rounded-md backdrop-blur-xs">
+                  {department.code}
+                </span>
+                <span
+                  className={`inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full text-[11px] font-bold ${
+                    department.status === 'ACTIVE'
+                      ? 'bg-[#137A3C]/40 text-emerald-300 border border-emerald-400/30'
+                      : 'bg-white/20 text-white/70 border border-white/20'
+                  }`}
+                >
+                  <span
+                    className={`w-1.5 h-1.5 rounded-full ${
+                      department.status === 'ACTIVE' ? 'bg-emerald-400' : 'bg-white/60'
+                    }`}
+                  />
+                  {department.status}
+                </span>
+              </div>
+              <p className="text-xs sm:text-sm text-white/85 max-w-2xl leading-relaxed">
+                {department.description ||
+                  'Undergraduate and postgraduate degree programs with autonomous curriculum and laboratory facilities.'}
+              </p>
+            </div>
+          </div>
+
+          {/* Quick Action Buttons Group */}
+          <div className="flex flex-col sm:flex-row items-start sm:items-center gap-2.5 shrink-0">
+            <div className="flex flex-wrap items-center gap-2">
+              <button
+                onClick={() => {
+                  setEditingStaff(null);
+                  setStaffAddMode('new');
+                  setStaffName('');
+                  setStaffInitials('');
+                  setStaffEmail('');
+                  setStaffPhone('');
+                  setModalError(null);
+                  setStaffModalOpen(true);
+                }}
+                className="inline-flex items-center gap-1.5 px-3.5 py-2 rounded-xl text-xs font-bold text-white bg-white/15 hover:bg-white/25 border border-white/20 transition-all cursor-pointer shadow-2xs"
               >
-                {department.status === 'ACTIVE' ? <CheckCircle2 className="w-3 h-3" /> : <XCircle className="w-3 h-3" />}
-                {department.status}
+                <Plus className="w-3.5 h-3.5" />
+                <span>Add Faculty</span>
+              </button>
+
+              <button
+                onClick={() => {
+                  setEditingSubject(null);
+                  setSubjCode('');
+                  setSubjName('');
+                  setSubjHours(4);
+                  setSubjLabBlock(4);
+                  setModalError(null);
+                  setSubjectModalOpen(true);
+                }}
+                className="inline-flex items-center gap-1.5 px-3.5 py-2 rounded-xl text-xs font-bold text-white bg-white/15 hover:bg-white/25 border border-white/20 transition-all cursor-pointer shadow-2xs"
+              >
+                <Plus className="w-3.5 h-3.5" />
+                <span>Add Subject</span>
+              </button>
+
+              <button
+                onClick={() => {
+                  setSecYear('1st Year');
+                  setSecName('A');
+                  setSecStrength(60);
+                  setModalError(null);
+                  setSectionModalOpen(true);
+                }}
+                className="inline-flex items-center gap-1.5 px-3.5 py-2 rounded-xl text-xs font-bold text-white bg-white/15 hover:bg-white/25 border border-white/20 transition-all cursor-pointer shadow-2xs"
+              >
+                <Plus className="w-3.5 h-3.5" />
+                <span>Add Section</span>
+              </button>
+            </div>
+
+            <div className="flex flex-col items-start sm:items-end">
+              <Link
+                href="/generator"
+                className="inline-flex items-center gap-1.5 px-4 py-2 rounded-xl text-xs font-bold text-[#3431B7] bg-white hover:bg-slate-50 transition-all shadow-xs cursor-pointer"
+              >
+                {deptStaff.length > 0 && subjects.length > 0 && classes.length > 0 ? (
+                  <Sparkles className="w-3.5 h-3.5 text-[#3431B7]" />
+                ) : (
+                  <Lock className="w-3.5 h-3.5 text-[#3431B7]" />
+                )}
+                <span>Generate Timetable</span>
+              </Link>
+              <span className="text-[10px] text-white/70 mt-1">
+                Unlocks after subjects, sections and teaching are set
               </span>
             </div>
-            <h1 className="text-2xl font-bold text-slate-900 mt-1">
-              {department.name}
-            </h1>
-            <p className="text-xs text-slate-500 mt-1 max-w-2xl">
-              {department.description || 'Undergraduate and postgraduate degree programs with autonomous curriculum and laboratory facilities.'}
-            </p>
           </div>
-        </div>
-
-        {/* Quick Action Buttons */}
-        <div className="flex flex-wrap items-center gap-2.5 shrink-0">
-          <button
-            onClick={() => {
-              setEditingStaff(null);
-              setStaffAddMode('new');
-              setStaffName('');
-              setStaffInitials('');
-              setStaffEmail('');
-              setStaffPhone('');
-              setModalError(null);
-              setStaffModalOpen(true);
-            }}
-            className="inline-flex items-center gap-1.5 px-3 py-2 rounded-lg text-xs font-semibold text-slate-700 bg-white border border-slate-300 hover:bg-slate-50 transition-colors shadow-2xs cursor-pointer"
-          >
-            <Users className="w-3.5 h-3.5 text-brand-600" />
-            <span>Add Faculty</span>
-          </button>
-          <button
-            onClick={() => {
-              setEditingSubject(null);
-              setSubjCode('');
-              setSubjName('');
-              setSubjHours(4);
-              setSubjLabBlock(4);
-              setModalError(null);
-              setSubjectModalOpen(true);
-            }}
-            className="inline-flex items-center gap-1.5 px-3 py-2 rounded-lg text-xs font-semibold text-slate-700 bg-white border border-slate-300 hover:bg-slate-50 transition-colors shadow-2xs cursor-pointer"
-          >
-            <BookOpen className="w-3.5 h-3.5 text-indigo-600" />
-            <span>Add Subject</span>
-          </button>
-          <button
-            onClick={() => {
-              setSecYear('1st Year');
-              setSecName('A');
-              setSecStrength(60);
-              setModalError(null);
-              setSectionModalOpen(true);
-            }}
-            className="inline-flex items-center gap-1.5 px-3 py-2 rounded-lg text-xs font-semibold text-slate-700 bg-white border border-slate-300 hover:bg-slate-50 transition-colors shadow-2xs cursor-pointer"
-          >
-            <GraduationCap className="w-3.5 h-3.5 text-emerald-600" />
-            <span>Add Section</span>
-          </button>
-          <Link
-            href="/generator"
-            className="inline-flex items-center gap-1.5 px-3.5 py-2 rounded-lg text-xs font-semibold text-white bg-brand-600 hover:bg-brand-700 transition-colors shadow-xs cursor-pointer"
-          >
-            <Cpu className="w-3.5 h-3.5" />
-            <span>Generate Timetable</span>
-          </Link>
         </div>
       </div>
 
-      {/* Internal Navigation Tabs */}
-      <div className="border-b border-slate-200">
-        <nav className="flex space-x-6">
+      {/* 2. 5-STEP HORIZONTAL SETUP STEPPER BAR (SSM Reference Design) */}
+      <div className="bg-white rounded-2xl border border-[#E3E5F0] p-4 shadow-xs">
+        <div className="flex flex-col sm:flex-row items-stretch sm:items-center justify-between gap-4">
+          {/* Step 1: Faculty */}
+          <div className="flex items-center gap-3 flex-1">
+            <div
+              className={`w-8 h-8 rounded-full flex items-center justify-center text-xs font-bold shrink-0 ${
+                deptStaff.length > 0
+                  ? 'bg-[#EBF8F0] text-[#137A3C] border border-[#CDEED8]'
+                  : 'bg-[#F4F5FB] text-slate-500 border border-[#E3E5F0]'
+              }`}
+            >
+              {deptStaff.length > 0 ? <Check className="w-4 h-4 stroke-[2.5]" /> : '1'}
+            </div>
+            <div>
+              <div className="text-xs font-bold text-slate-900">Faculty</div>
+              <div className="text-[11px] text-slate-500">
+                {deptStaff.length > 0 ? `${deptStaff.length} added` : '0 · add faculty'}
+              </div>
+            </div>
+          </div>
+          <div className="hidden lg:block h-px w-8 bg-[#E3E5F0] shrink-0" />
+
+          {/* Step 2: Subjects */}
+          <div className="flex items-center gap-3 flex-1">
+            <div
+              className={`w-8 h-8 rounded-full flex items-center justify-center text-xs font-bold shrink-0 ${
+                subjects.length > 0
+                  ? 'bg-[#EBF8F0] text-[#137A3C] border border-[#CDEED8]'
+                  : 'bg-[#F4F5FB] text-slate-500 border border-[#E3E5F0]'
+              }`}
+            >
+              {subjects.length > 0 ? <Check className="w-4 h-4 stroke-[2.5]" /> : '2'}
+            </div>
+            <div>
+              <div className="text-xs font-bold text-slate-900">Subjects</div>
+              <div className="text-[11px] text-slate-500">
+                {subjects.length > 0 ? `${subjects.length} added` : '0 · add subjects'}
+              </div>
+            </div>
+          </div>
+          <div className="hidden lg:block h-px w-8 bg-[#E3E5F0] shrink-0" />
+
+          {/* Step 3: Sections */}
+          <div className="flex items-center gap-3 flex-1">
+            <div
+              className={`w-8 h-8 rounded-full flex items-center justify-center text-xs font-bold shrink-0 ${
+                classes.length > 0
+                  ? 'bg-[#EBF8F0] text-[#137A3C] border border-[#CDEED8]'
+                  : 'bg-[#F4F5FB] text-slate-500 border border-[#E3E5F0]'
+              }`}
+            >
+              {classes.length > 0 ? <Check className="w-4 h-4 stroke-[2.5]" /> : '3'}
+            </div>
+            <div>
+              <div className="text-xs font-bold text-slate-900">Sections</div>
+              <div className="text-[11px] text-slate-500">
+                {classes.length > 0 ? `${classes.length} added` : '0 · add sections'}
+              </div>
+            </div>
+          </div>
+          <div className="hidden lg:block h-px w-8 bg-[#E3E5F0] shrink-0" />
+
+          {/* Step 4: Teaching */}
+          <div className="flex items-center gap-3 flex-1">
+            <div
+              className={`w-8 h-8 rounded-full flex items-center justify-center text-xs font-bold shrink-0 ${
+                assignments.length > 0
+                  ? 'bg-[#EBF8F0] text-[#137A3C] border border-[#CDEED8]'
+                  : 'bg-[#F4F5FB] text-slate-500 border border-[#E3E5F0]'
+              }`}
+            >
+              {assignments.length > 0 ? <Check className="w-4 h-4 stroke-[2.5]" /> : '4'}
+            </div>
+            <div>
+              <div className="text-xs font-bold text-slate-900">Teaching</div>
+              <div className="text-[11px] text-slate-500">
+                {assignments.length > 0 ? `${assignments.length} mapped` : '0 mapped'}
+              </div>
+            </div>
+          </div>
+          <div className="hidden lg:block h-px w-8 bg-[#E3E5F0] shrink-0" />
+
+          {/* Step 5: Timetable */}
+          <div className="flex items-center gap-3 flex-1">
+            <div
+              className={`w-8 h-8 rounded-full flex items-center justify-center text-xs font-bold shrink-0 ${
+                deptStaff.length > 0 && subjects.length > 0 && classes.length > 0
+                  ? 'bg-[#EEF0FA] text-[#3431B7] border border-[#D2D6EC]'
+                  : 'bg-[#F4F5FB] text-slate-400 border border-[#E3E5F0]'
+              }`}
+            >
+              {deptStaff.length > 0 && subjects.length > 0 && classes.length > 0 ? (
+                <Sparkles className="w-4 h-4" />
+              ) : (
+                <Lock className="w-4 h-4" />
+              )}
+            </div>
+            <div>
+              <div className="text-xs font-bold text-slate-900">Timetable</div>
+              <div className="text-[11px] text-slate-500">
+                {deptStaff.length > 0 && subjects.length > 0 && classes.length > 0 ? 'Ready' : 'Locked'}
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      {/* 3. SUB-NAVIGATION TABS */}
+      <div className="border-b border-[#E3E5F0]">
+        <nav className="flex space-x-8 overflow-x-auto">
           <button
             onClick={() => setActiveTab('overview')}
-            className={`flex items-center gap-2 py-3 border-b-2 text-sm font-semibold transition-colors cursor-pointer ${
+            className={`py-3 text-sm font-bold transition-all border-b-2 cursor-pointer shrink-0 ${
               activeTab === 'overview'
-                ? 'border-brand-600 text-brand-700'
-                : 'border-transparent text-slate-500 hover:text-slate-900 hover:border-slate-300'
+                ? 'border-[#3431B7] text-[#3431B7]'
+                : 'border-transparent text-slate-500 hover:text-slate-800'
             }`}
           >
-            <Layers className="w-4 h-4" />
-            <span>Overview</span>
+            Overview
           </button>
-
           <button
             onClick={() => setActiveTab('staff')}
-            className={`flex items-center gap-2 py-3 border-b-2 text-sm font-semibold transition-colors cursor-pointer ${
+            className={`py-3 text-sm font-bold transition-all border-b-2 cursor-pointer shrink-0 ${
               activeTab === 'staff'
-                ? 'border-brand-600 text-brand-700'
-                : 'border-transparent text-slate-500 hover:text-slate-900 hover:border-slate-300'
+                ? 'border-[#3431B7] text-[#3431B7]'
+                : 'border-transparent text-slate-500 hover:text-slate-800'
             }`}
           >
-            <Users className="w-4 h-4" />
-            <span>Staff ({deptStaff.length})</span>
+            Staff{' '}
+            <span className="ml-1 text-xs px-2 py-0.5 rounded-full bg-[#EEF0FA] text-[#3431B7]">
+              {deptStaff.length}
+            </span>
           </button>
-
           <button
             onClick={() => setActiveTab('subjects')}
-            className={`flex items-center gap-2 py-3 border-b-2 text-sm font-semibold transition-colors cursor-pointer ${
+            className={`py-3 text-sm font-bold transition-all border-b-2 cursor-pointer shrink-0 ${
               activeTab === 'subjects'
-                ? 'border-brand-600 text-brand-700'
-                : 'border-transparent text-slate-500 hover:text-slate-900 hover:border-slate-300'
+                ? 'border-[#3431B7] text-[#3431B7]'
+                : 'border-transparent text-slate-500 hover:text-slate-800'
             }`}
           >
-            <BookOpen className="w-4 h-4" />
-            <span>Subjects ({subjects.length})</span>
+            Subjects{' '}
+            <span className="ml-1 text-xs px-2 py-0.5 rounded-full bg-[#EEF0FA] text-[#3431B7]">
+              {subjects.length}
+            </span>
           </button>
-
           <button
             onClick={() => setActiveTab('years')}
-            className={`flex items-center gap-2 py-3 border-b-2 text-sm font-semibold transition-colors cursor-pointer ${
+            className={`py-3 text-sm font-bold transition-all border-b-2 cursor-pointer shrink-0 ${
               activeTab === 'years'
-                ? 'border-brand-600 text-brand-700'
-                : 'border-transparent text-slate-500 hover:text-slate-900 hover:border-slate-300'
+                ? 'border-[#3431B7] text-[#3431B7]'
+                : 'border-transparent text-slate-500 hover:text-slate-800'
             }`}
           >
-            <GraduationCap className="w-4 h-4" />
-            <span>Academic Years & Sections ({classes.length})</span>
+            Academic Years & Sections{' '}
+            <span className="ml-1 text-xs px-2 py-0.5 rounded-full bg-[#EEF0FA] text-[#3431B7]">
+              {classes.length}
+            </span>
           </button>
-
           <button
             onClick={() => setActiveTab('assignments')}
-            className={`flex items-center gap-2 py-3 border-b-2 text-sm font-semibold transition-colors cursor-pointer ${
+            className={`py-3 text-sm font-bold transition-all border-b-2 cursor-pointer shrink-0 ${
               activeTab === 'assignments'
-                ? 'border-brand-600 text-brand-700'
-                : 'border-transparent text-slate-500 hover:text-slate-900 hover:border-slate-300'
+                ? 'border-[#3431B7] text-[#3431B7]'
+                : 'border-transparent text-slate-500 hover:text-slate-800'
             }`}
           >
-            <Briefcase className="w-4 h-4" />
-            <span>Teaching Assignments ({assignments.length})</span>
+            Teaching Assignments{' '}
+            <span className="ml-1 text-xs px-2 py-0.5 rounded-full bg-[#EEF0FA] text-[#3431B7]">
+              {assignments.length}
+            </span>
           </button>
         </nav>
       </div>
 
-      {/* ========================================================= */}
-      {/* TAB 1: OVERVIEW */}
-      {/* ========================================================= */}
+      {/* 4. TAB 1: OVERVIEW — EXACT SSM REFERENCE DESIGN (Image 2) */}
       {activeTab === 'overview' && (
-        <div className="space-y-6">
-          {/* Quick Metrics Bar */}
-          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
-            <div className="bg-white rounded-xl border border-slate-200 p-5 shadow-xs">
-              <div className="flex items-center justify-between mb-2">
-                <span className="text-xs font-semibold uppercase tracking-wider text-slate-500">Faculty Members</span>
-                <div className="w-8 h-8 rounded-lg bg-brand-50 text-brand-600 flex items-center justify-center">
-                  <Users className="w-4 h-4" />
-                </div>
-              </div>
-              <div className="text-2xl font-bold text-slate-900">{deptStaff.length}</div>
-              <div className="text-xs text-slate-500 mt-1">
-                Canonical department faculty
-              </div>
-            </div>
-
-            <div className="bg-white rounded-xl border border-slate-200 p-5 shadow-xs">
-              <div className="flex items-center justify-between mb-2">
-                <span className="text-xs font-semibold uppercase tracking-wider text-slate-500">Subjects Master</span>
-                <div className="w-8 h-8 rounded-lg bg-indigo-50 text-indigo-600 flex items-center justify-center">
-                  <BookOpen className="w-4 h-4" />
-                </div>
-              </div>
-              <div className="text-2xl font-bold text-slate-900">{subjects.length}</div>
-              <div className="text-xs text-slate-500 mt-1">
-                Theory & laboratory courses
-              </div>
-            </div>
-
-            <div className="bg-white rounded-xl border border-slate-200 p-5 shadow-xs">
-              <div className="flex items-center justify-between mb-2">
-                <span className="text-xs font-semibold uppercase tracking-wider text-slate-500">Class Sections</span>
-                <div className="w-8 h-8 rounded-lg bg-emerald-50 text-emerald-600 flex items-center justify-center">
-                  <GraduationCap className="w-4 h-4" />
-                </div>
-              </div>
-              <div className="text-2xl font-bold text-slate-900">{classes.length}</div>
-              <div className="text-xs text-slate-500 mt-1">
-                Across 4 undergraduate years
-              </div>
-            </div>
-
-            <div className="bg-white rounded-xl border border-slate-200 p-5 shadow-xs">
-              <div className="flex items-center justify-between mb-2">
-                <span className="text-xs font-semibold uppercase tracking-wider text-slate-500">Teaching Mappings</span>
-                <div className="w-8 h-8 rounded-lg bg-purple-50 text-purple-600 flex items-center justify-center">
-                  <Briefcase className="w-4 h-4" />
-                </div>
-              </div>
-              <div className="text-2xl font-bold text-slate-900">{assignments.length}</div>
-              <div className="text-xs text-slate-500 mt-1">
-                Faculty-subject allocations
-              </div>
-            </div>
-          </div>
-
-          {/* Academic Years Cohort Grid */}
-          <div className="bg-white rounded-2xl border border-slate-200 p-6 shadow-xs space-y-4">
+        <div className="grid grid-cols-1 lg:grid-cols-12 gap-6 items-start">
+          {/* Left Column: Academic Year Levels & Cohorts (8 cols on lg, 9 on xl) */}
+          <div className="lg:col-span-8 xl:col-span-9 space-y-4">
             <div className="flex items-center justify-between">
               <div>
-                <h3 className="text-base font-bold text-slate-900">Academic Year Levels & Cohorts</h3>
-                <p className="text-xs text-slate-500">
+                <h2 className="text-xl font-extrabold text-slate-900 tracking-tight">
+                  Academic Year Levels & Cohorts
+                </h2>
+                <p className="text-xs text-slate-500 mt-0.5">
                   Four-year undergraduate degree progression for {department.name}
                 </p>
               </div>
+
               <button
                 onClick={() => setActiveTab('years')}
-                className="text-xs font-bold text-brand-600 hover:text-brand-700 flex items-center gap-1 cursor-pointer"
+                className="text-xs font-bold text-[#3431B7] hover:text-[#28229E] inline-flex items-center gap-1 cursor-pointer"
               >
                 <span>Manage Sections</span>
                 <ChevronRight className="w-3.5 h-3.5" />
               </button>
             </div>
 
-            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
-              {UNDERGRADUATE_YEARS.map((yr) => {
+            {/* 4 Column Cohort Cards */}
+            <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-4 gap-4">
+              {UNDERGRADUATE_YEARS.map((yr, idx) => {
                 const yearClasses = classes.filter(c => c.yearOfStudy === yr);
                 const yearSubjects = subjects.filter(s => s.yearOfStudy === yr);
 
                 return (
-                  <div key={yr} className="p-4 rounded-xl border border-slate-200 bg-slate-50/60 hover:bg-slate-50 transition-colors">
-                    <div className="flex items-center justify-between mb-2">
-                      <span className="font-bold text-slate-900 text-sm">{yr}</span>
-                      <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-brand-50 text-brand-700 border border-brand-200">
-                        {yearClasses.length} {yearClasses.length === 1 ? 'Section' : 'Sections'}
-                      </span>
+                  <div
+                    key={yr}
+                    className="bg-white border border-[#E3E5F0] rounded-2xl p-4 shadow-xs flex flex-col justify-between"
+                  >
+                    <div>
+                      {/* Year Card Header */}
+                      <div className="flex items-center gap-2.5 mb-3">
+                        <div className="w-7 h-7 rounded-lg bg-[#28229E] text-white flex items-center justify-center font-bold text-xs shrink-0">
+                          {idx + 1}
+                        </div>
+                        <div>
+                          <div className="text-sm font-extrabold text-slate-900">{yr}</div>
+                          <div className="text-[11px] text-slate-400 font-medium">
+                            {yearClasses.length} sections
+                          </div>
+                        </div>
+                      </div>
+
+                      {/* Sections Content Box */}
+                      {yearClasses.length > 0 ? (
+                        <div className="space-y-2 mb-3">
+                          {yearClasses.map(cls => (
+                            <div
+                              key={cls.classId}
+                              className="p-2.5 rounded-xl bg-[#F4F5FB] border border-[#E3E5F0] flex items-center justify-between text-xs"
+                            >
+                              <span className="font-bold text-slate-800">Section {cls.section}</span>
+                              <span className="text-[11px] text-slate-500 font-medium">
+                                {cls.strength || 60} students
+                              </span>
+                            </div>
+                          ))}
+                        </div>
+                      ) : (
+                        <div className="border border-dashed border-[#D2D6EC] bg-[#F7F8FD]/60 rounded-xl p-4 text-center mb-3">
+                          <div className="w-6 h-6 rounded-full bg-slate-200 text-slate-600 flex items-center justify-center mx-auto mb-1 text-xs font-bold">
+                            +
+                          </div>
+                          <div className="text-xs font-bold text-slate-700">No sections yet</div>
+                          <div className="text-[10px] text-slate-400">Add the first section</div>
+                        </div>
+                      )}
+
+                      {/* Add Section Button */}
+                      <button
+                        onClick={() => {
+                          setSecYear(yr);
+                          setSecName(String.fromCharCode(65 + yearClasses.length));
+                          setSecStrength(60);
+                          setModalError(null);
+                          setSectionModalOpen(true);
+                        }}
+                        className="w-full border border-slate-200 hover:border-[#3431B7] rounded-xl py-2 text-xs font-bold text-[#3431B7] bg-white hover:bg-[#F4F5FB] transition-colors cursor-pointer"
+                      >
+                        + Add Section
+                      </button>
                     </div>
 
-                    <div className="space-y-1.5 text-xs text-slate-600 mb-3">
-                      <div className="flex justify-between">
-                        <span className="text-slate-400">Sections:</span>
-                        <span className="font-bold text-slate-800">
-                          {yearClasses.length > 0
-                            ? yearClasses.map(c => `Sec ${c.section}`).join(', ')
-                            : 'None configured'}
-                        </span>
-                      </div>
-                      <div className="flex justify-between">
-                        <span className="text-slate-400">Tagged Subjects:</span>
-                        <span className="font-medium text-slate-800">{yearSubjects.length} courses</span>
-                      </div>
+                    {/* Bottom Tagged Subjects Count */}
+                    <div className="text-[11px] text-slate-500 font-medium pt-3 mt-3 border-t border-slate-100 flex items-center justify-between">
+                      <span className="text-slate-400">Tagged subjects</span>
+                      <span className="font-bold text-slate-800">{yearSubjects.length} courses</span>
                     </div>
-
-                    <button
-                      onClick={() => {
-                        setSecYear(yr);
-                        setSecName('A');
-                        setSecStrength(60);
-                        setModalError(null);
-                        setSectionModalOpen(true);
-                      }}
-                      className="w-full py-1.5 px-3 rounded-lg text-xs font-semibold text-slate-700 bg-white border border-slate-200 hover:bg-slate-100 transition-colors text-center cursor-pointer"
-                    >
-                      + Add Section
-                    </button>
                   </div>
                 );
               })}
+            </div>
+          </div>
+
+          {/* Right Column: Next Step Card & Department Summary (4 cols on lg, 3 on xl) */}
+          <div className="lg:col-span-4 xl:col-span-3 space-y-4">
+            {/* Card 1: Next Step Indigo Gradient Card */}
+            <div className="rounded-2xl bg-gradient-to-br from-[#29229D] via-[#322BB7] to-[#3F35C8] p-5 text-white shadow-xs">
+              <div className="w-7 h-7 rounded-full bg-white/20 flex items-center justify-center text-white mb-3">
+                <ArrowRight className="w-4 h-4" />
+              </div>
+              <div className="text-[10px] uppercase font-bold tracking-wider text-white/80 mb-1">
+                Next step
+              </div>
+              <h3 className="text-base font-extrabold text-white leading-tight">
+                {subjects.length === 0
+                  ? 'Add your first subject'
+                  : classes.length === 0
+                  ? 'Create class sections'
+                  : assignments.length === 0
+                  ? 'Map faculty to subjects'
+                  : 'Ready to generate timetable'}
+              </h3>
+              <p className="text-xs text-white/85 mt-1.5 leading-relaxed">
+                {subjects.length === 0
+                  ? 'Subjects are the courses that will appear in the timetable.'
+                  : classes.length === 0
+                  ? 'Set up academic year class divisions for student cohorts.'
+                  : assignments.length === 0
+                  ? 'Assign faculty members to their respective subjects and classes.'
+                  : 'All prerequisites complete! Proceed to the Timetable Generator.'}
+              </p>
+
+              {subjects.length === 0 ? (
+                <button
+                  onClick={() => {
+                    setEditingSubject(null);
+                    setSubjCode('');
+                    setSubjName('');
+                    setSubjHours(4);
+                    setSubjLabBlock(4);
+                    setModalError(null);
+                    setSubjectModalOpen(true);
+                  }}
+                  className="mt-4 px-4 py-2 rounded-xl text-xs font-bold text-[#322BB7] bg-white hover:bg-slate-50 transition-all shadow-xs cursor-pointer"
+                >
+                  Add Subject
+                </button>
+              ) : classes.length === 0 ? (
+                <button
+                  onClick={() => {
+                    setSecYear('1st Year');
+                    setSecName('A');
+                    setSecStrength(60);
+                    setModalError(null);
+                    setSectionModalOpen(true);
+                  }}
+                  className="mt-4 px-4 py-2 rounded-xl text-xs font-bold text-[#322BB7] bg-white hover:bg-slate-50 transition-all shadow-xs cursor-pointer"
+                >
+                  Add Section
+                </button>
+              ) : assignments.length === 0 ? (
+                <button
+                  onClick={() => setActiveTab('assignments')}
+                  className="mt-4 px-4 py-2 rounded-xl text-xs font-bold text-[#322BB7] bg-white hover:bg-slate-50 transition-all shadow-xs cursor-pointer"
+                >
+                  Map Faculty
+                </button>
+              ) : (
+                <Link
+                  href="/generator"
+                  className="mt-4 inline-block px-4 py-2 rounded-xl text-xs font-bold text-[#322BB7] bg-white hover:bg-slate-50 transition-all shadow-xs cursor-pointer"
+                >
+                  Generate Timetable
+                </Link>
+              )}
+            </div>
+
+            {/* Card 2: Department Summary */}
+            <div className="bg-white rounded-2xl border border-[#E3E5F0] p-5 shadow-xs">
+              <h3 className="text-sm font-extrabold text-slate-900 mb-3">
+                Department summary
+              </h3>
+              <div className="space-y-3.5">
+                <div className="flex items-center justify-between">
+                  <div className="flex items-center gap-2.5">
+                    <Users className="w-4 h-4 text-[#3431B7] shrink-0" />
+                    <div>
+                      <div className="text-xs font-bold text-slate-800">Faculty members</div>
+                      <div className="text-[10px] text-slate-400">Canonical department faculty</div>
+                    </div>
+                  </div>
+                  <span className="text-sm font-extrabold text-slate-900">{deptStaff.length}</span>
+                </div>
+
+                <div className="flex items-center justify-between">
+                  <div className="flex items-center gap-2.5">
+                    <BookOpen className="w-4 h-4 text-[#3431B7] shrink-0" />
+                    <div>
+                      <div className="text-xs font-bold text-slate-800">Subjects master</div>
+                      <div className="text-[10px] text-slate-400">Theory & laboratory courses</div>
+                    </div>
+                  </div>
+                  <span className="text-sm font-extrabold text-slate-900">{subjects.length}</span>
+                </div>
+
+                <div className="flex items-center justify-between">
+                  <div className="flex items-center gap-2.5">
+                    <GraduationCap className="w-4 h-4 text-[#3431B7] shrink-0" />
+                    <div>
+                      <div className="text-xs font-bold text-slate-800">Class sections</div>
+                      <div className="text-[10px] text-slate-400">Across 4 undergraduate years</div>
+                    </div>
+                  </div>
+                  <span className="text-sm font-extrabold text-slate-900">{classes.length}</span>
+                </div>
+
+                <div className="flex items-center justify-between">
+                  <div className="flex items-center gap-2.5">
+                    <Briefcase className="w-4 h-4 text-[#3431B7] shrink-0" />
+                    <div>
+                      <div className="text-xs font-bold text-slate-800">Teaching mappings</div>
+                      <div className="text-[10px] text-slate-400">Faculty-subject allocations</div>
+                    </div>
+                  </div>
+                  <span className="text-sm font-extrabold text-slate-900">{assignments.length}</span>
+                </div>
+              </div>
             </div>
           </div>
         </div>
@@ -1060,17 +1332,26 @@ export default function DepartmentDetailPage() {
       )}
 
       {/* ========================================================= */}
-      {/* TAB 4: ACADEMIC YEARS & SECTIONS */}
+      {/* TAB 4: ACADEMIC YEARS & SECTIONS — EXACT SSM REFERENCE DESIGN (Image 3) */}
       {/* ========================================================= */}
       {activeTab === 'years' && (
-        <div className="space-y-6">
-          <div className="flex items-center justify-between">
+        <div className="space-y-4">
+          {/* Header Row */}
+          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
             <div>
-              <h3 className="text-base font-bold text-slate-900">Undergraduate Year Cohorts & Sections</h3>
-              <p className="text-xs text-slate-500">
+              <div className="flex items-center gap-2">
+                <h2 className="text-xl font-extrabold text-slate-900 tracking-tight">
+                  Undergraduate Year Cohorts & Sections
+                </h2>
+                <span className="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-semibold bg-amber-50 text-amber-700 border border-amber-200">
+                  Sections A and B are sample
+                </span>
+              </div>
+              <p className="text-xs text-slate-500 mt-0.5">
                 Configure student class divisions (Sections A, B, C) for each academic level
               </p>
             </div>
+
             <button
               onClick={() => {
                 setSecYear('1st Year');
@@ -1079,85 +1360,126 @@ export default function DepartmentDetailPage() {
                 setModalError(null);
                 setSectionModalOpen(true);
               }}
-              className="inline-flex items-center gap-1.5 px-3.5 py-2 rounded-lg text-xs font-semibold text-white bg-brand-600 hover:bg-brand-700 transition-colors shadow-xs cursor-pointer"
+              className="inline-flex items-center gap-1.5 px-4 py-2.5 rounded-xl text-xs font-bold text-white bg-[#3431B7] hover:bg-[#28229E] transition-colors shadow-xs cursor-pointer shrink-0"
             >
-              <Plus className="w-4 h-4" />
+              <Plus className="w-4 h-4 stroke-[2.5]" />
               <span>Create New Section</span>
             </button>
           </div>
 
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-            {UNDERGRADUATE_YEARS.map((yr) => {
+          {/* 4 Column Cohort Board (Matches ssm_3_sections_board) */}
+          <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-4 gap-4">
+            {UNDERGRADUATE_YEARS.map((yr, idx) => {
               const yearClasses = classes.filter(c => c.yearOfStudy === yr);
+              const yearSubjects = subjects.filter(s => s.yearOfStudy === yr);
 
               return (
-                <div key={yr} className="bg-white rounded-2xl border border-slate-200 p-6 shadow-xs space-y-4">
-                  <div className="flex items-center justify-between border-b border-slate-100 pb-3">
-                    <div className="flex items-center gap-2.5">
-                      <div className="w-9 h-9 rounded-xl bg-brand-50 text-brand-700 font-bold flex items-center justify-center text-sm">
-                        {yr[0]}
+                <div
+                  key={yr}
+                  className="bg-white border border-[#E3E5F0] rounded-2xl p-4 shadow-xs flex flex-col justify-between"
+                >
+                  <div>
+                    {/* Header: Badge, Title, Subtitle, and Plus Button */}
+                    <div className="flex items-center justify-between border-b border-slate-100 pb-3 mb-3">
+                      <div className="flex items-center gap-2.5">
+                        <div className="w-7 h-7 rounded-lg bg-[#28229E] text-white flex items-center justify-center font-bold text-xs shrink-0">
+                          {idx + 1}
+                        </div>
+                        <div>
+                          <h4 className="font-extrabold text-slate-900 text-sm leading-tight">{yr}</h4>
+                          <span className="text-[11px] text-slate-400 font-medium">Academic Year 2025–2026</span>
+                        </div>
                       </div>
-                      <div>
-                        <h4 className="font-bold text-slate-900 text-base">{yr}</h4>
-                        <span className="text-xs text-slate-400">Academic Year 2025–2026</span>
-                      </div>
-                    </div>
-                    <button
-                      onClick={() => {
-                        setSecYear(yr);
-                        setSecName(String.fromCharCode(65 + yearClasses.length));
-                        setSecStrength(60);
-                        setModalError(null);
-                        setSectionModalOpen(true);
-                      }}
-                      className="inline-flex items-center gap-1 px-2.5 py-1 rounded-md text-xs font-bold text-brand-700 bg-brand-50 hover:bg-brand-100 transition-colors cursor-pointer"
-                    >
-                      <Plus className="w-3.5 h-3.5" />
-                      <span>Add Section</span>
-                    </button>
-                  </div>
 
-                  {yearClasses.length === 0 ? (
-                    <div className="p-6 text-center text-slate-400 text-xs border border-dashed border-slate-200 rounded-xl">
-                      No sections configured for {yr}. Click "Add Section" above.
+                      <button
+                        onClick={() => {
+                          setSecYear(yr);
+                          setSecName(String.fromCharCode(65 + yearClasses.length));
+                          setSecStrength(60);
+                          setModalError(null);
+                          setSectionModalOpen(true);
+                        }}
+                        className="w-7 h-7 rounded-lg bg-[#F4F5FB] hover:bg-[#EEF0FA] text-[#3431B7] flex items-center justify-center font-bold text-xs transition-colors cursor-pointer"
+                        title={`Add section to ${yr}`}
+                      >
+                        <Plus className="w-3.5 h-3.5 stroke-[2.5]" />
+                      </button>
                     </div>
-                  ) : (
-                    <div className="space-y-2">
-                      {yearClasses.map((cls) => {
-                        const classAssignments = assignments.filter(a => a.classId === cls.classId);
-                        const totalHours = classAssignments.reduce((acc, a) => acc + (a.weeklyHours || 0), 0);
 
-                        return (
+                    {/* Section Cards List */}
+                    {yearClasses.length > 0 ? (
+                      <div className="space-y-2 mb-3">
+                        {yearClasses.map(cls => (
                           <div
                             key={cls.classId}
-                            className="p-3.5 rounded-xl border border-slate-200 bg-slate-50/60 hover:bg-slate-50 flex items-center justify-between transition-colors"
+                            onClick={() => {
+                              setAssignmentClassFilter(cls.classId);
+                              setActiveTab('assignments');
+                            }}
+                            className="bg-[#F4F5FB] border border-[#E3E5F0] rounded-xl p-3 flex items-center justify-between hover:bg-[#EEF0FA] transition-colors cursor-pointer group"
+                            title="Click to view assignments for this section"
                           >
-                            <div>
-                              <div className="flex items-center gap-2">
-                                <span className="font-extrabold text-slate-900 text-sm">
-                                  Section {cls.section}
-                                </span>
-                                <span className="text-xs text-slate-500 font-mono">
-                                  ({cls.strength} Students)
-                                </span>
+                            <div className="flex items-center gap-2.5 min-w-0">
+                              <div className="w-7 h-7 rounded-lg bg-white border border-[#E3E5F0] text-[#3431B7] font-bold text-xs flex items-center justify-center shrink-0">
+                                {cls.section}
                               </div>
-                              <div className="text-xs text-slate-500 mt-0.5">
-                                Allocated Workload: <span className="font-bold text-brand-700">{totalHours} hrs/week</span> across {classAssignments.length} courses
+                              <div className="min-w-0">
+                                <div className="text-xs font-bold text-slate-900">
+                                  Section {cls.section}
+                                </div>
+                                <div className="text-[10px] text-slate-500 truncate">
+                                  Tap to manage subjects & students
+                                </div>
                               </div>
                             </div>
-
-                            <Link
-                              href="/generator"
-                              className="inline-flex items-center gap-1 text-xs font-bold text-brand-600 hover:text-brand-700 bg-white px-2.5 py-1.5 rounded-lg border border-slate-200 shadow-2xs hover:border-brand-300 transition-colors"
-                            >
-                              <Cpu className="w-3.5 h-3.5" />
-                              <span>Generate</span>
-                            </Link>
+                            <ChevronRight className="w-4 h-4 text-slate-400 group-hover:translate-x-0.5 transition-transform shrink-0" />
                           </div>
-                        );
-                      })}
-                    </div>
-                  )}
+                        ))}
+
+                        <button
+                          onClick={() => {
+                            setSecYear(yr);
+                            setSecName(String.fromCharCode(65 + yearClasses.length));
+                            setSecStrength(60);
+                            setModalError(null);
+                            setSectionModalOpen(true);
+                          }}
+                          className="w-full border border-slate-200 hover:border-[#3431B7] rounded-xl py-2 text-xs font-bold text-[#3431B7] bg-white hover:bg-[#F4F5FB] transition-colors cursor-pointer"
+                        >
+                          + Add another section
+                        </button>
+                      </div>
+                    ) : (
+                      <div className="space-y-2 mb-3">
+                        <div className="border border-dashed border-[#D2D6EC] bg-[#F7F8FD]/60 rounded-xl p-5 text-center">
+                          <div className="w-7 h-7 rounded-full bg-slate-200 text-slate-600 flex items-center justify-center mx-auto mb-1.5 text-xs font-bold">
+                            +
+                          </div>
+                          <div className="text-xs font-bold text-slate-700">No sections yet</div>
+                          <div className="text-[11px] text-slate-400">Add Section A for {yr}</div>
+                        </div>
+
+                        <button
+                          onClick={() => {
+                            setSecYear(yr);
+                            setSecName('A');
+                            setSecStrength(60);
+                            setModalError(null);
+                            setSectionModalOpen(true);
+                          }}
+                          className="w-full border border-slate-200 hover:border-[#3431B7] rounded-xl py-2 text-xs font-bold text-[#3431B7] bg-white hover:bg-[#F4F5FB] transition-colors cursor-pointer"
+                        >
+                          + Add Section
+                        </button>
+                      </div>
+                    )}
+                  </div>
+
+                  {/* Bottom: Tagged subjects */}
+                  <div className="text-[11px] text-slate-500 font-medium pt-3 mt-3 border-t border-slate-100 flex items-center justify-between">
+                    <span className="text-slate-400">Tagged subjects</span>
+                    <span className="font-bold text-slate-800">{yearSubjects.length} courses</span>
+                  </div>
                 </div>
               );
             })}

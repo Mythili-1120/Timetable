@@ -136,20 +136,72 @@ export async function publishTimetable(
     totalHours: data.totalHours
   });
 
+  invalidateTimetableCache();
   return publishedRecord;
 }
 
-export async function getPublishedTimetables(academicYear?: string): Promise<PublishedTimetable[]> {
+// In-memory cache for fast responsive navigation
+let cachedPublished: PublishedTimetable[] | null = null;
+let publishedCacheTime = 0;
+const CACHE_TTL_MS = 60000; // 60 seconds
+
+export function invalidateTimetableCache() {
+  cachedPublished = null;
+  publishedCacheTime = 0;
+}
+
+export function getCachedPublishedTimetables(academicYear?: string): PublishedTimetable[] | null {
+  if (cachedPublished && (Date.now() - publishedCacheTime < CACHE_TTL_MS)) {
+    if (academicYear) {
+      return cachedPublished.filter(t => t.academicYear === academicYear);
+    }
+    return cachedPublished;
+  }
+  return null;
+}
+
+export function getCachedPublishedTimetableStats(academicYear?: string): {
+  totalPublishedVersions: number;
+  uniqueClassesWithTimetable: number;
+} | null {
+  const published = getCachedPublishedTimetables(academicYear);
+  if (!published) return null;
+  const latestMap = new Map<string, PublishedTimetable>();
+  published.forEach(tt => {
+    const cur = latestMap.get(tt.classId);
+    if (!cur || tt.versionNumber > cur.versionNumber) {
+      latestMap.set(tt.classId, tt);
+    }
+  });
+  return {
+    totalPublishedVersions: published.length,
+    uniqueClassesWithTimetable: latestMap.size
+  };
+}
+
+export async function getPublishedTimetables(academicYear?: string, forceRefresh = false): Promise<PublishedTimetable[]> {
+  if (!forceRefresh && cachedPublished && (Date.now() - publishedCacheTime < CACHE_TTL_MS)) {
+    if (academicYear) {
+      return cachedPublished.filter(t => t.academicYear === academicYear);
+    }
+    return cachedPublished;
+  }
+
   try {
     let q = query(collection(db, 'publishedTimetables'));
-    if (academicYear) {
+    if (academicYear && (!cachedPublished || forceRefresh)) {
       q = query(collection(db, 'publishedTimetables'), where('academicYear', '==', academicYear));
     }
     const snap = await getDocs(q);
-    return snap.docs.map(d => d.data() as PublishedTimetable);
+    const result = snap.docs.map(d => d.data() as PublishedTimetable);
+    if (!academicYear) {
+      cachedPublished = result;
+      publishedCacheTime = Date.now();
+    }
+    return result;
   } catch (err) {
     console.error('Error fetching published timetables:', err);
-    return [];
+    return cachedPublished ? getCachedPublishedTimetables(academicYear) || [] : [];
   }
 }
 

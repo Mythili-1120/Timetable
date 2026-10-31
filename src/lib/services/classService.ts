@@ -17,23 +17,54 @@ export function generateClassId(
 
 let cachedClasses: ClassSection[] | null = null;
 let cacheTime = 0;
-const CACHE_TTL_MS = 15000;
+const CACHE_TTL_MS = 60000; // 60 seconds (revalidated on mutation or expiration)
 
 export function invalidateClassCache() {
   cachedClasses = null;
   cacheTime = 0;
 }
 
+export function getCachedClasses(departmentId?: string, academicYear?: string): ClassSection[] | null {
+  if (cachedClasses && (Date.now() - cacheTime < CACHE_TTL_MS)) {
+    let result = cachedClasses;
+    if (departmentId) {
+      result = result.filter(c => c.departmentId === departmentId);
+    }
+    if (academicYear) {
+      result = result.filter(c => c.academicYear === academicYear);
+    }
+    return result;
+  }
+  return null;
+}
+
+export function getCachedGlobalClassCounts(): { total: number; active: number } | null {
+  const classes = getCachedClasses();
+  if (!classes) return null;
+  let active = 0;
+  classes.forEach(c => {
+    if (c.status === 'ACTIVE') active++;
+  });
+  return { total: classes.length, active };
+}
+
 export async function getAllClasses(departmentId?: string, academicYear?: string, forceRefresh = false): Promise<ClassSection[]> {
-  if (!forceRefresh && !departmentId && !academicYear && cachedClasses && (Date.now() - cacheTime < CACHE_TTL_MS)) {
-    return cachedClasses;
+  if (!forceRefresh && cachedClasses && (Date.now() - cacheTime < CACHE_TTL_MS)) {
+    let result = cachedClasses;
+    if (departmentId) {
+      result = result.filter(c => c.departmentId === departmentId);
+    }
+    if (academicYear) {
+      result = result.filter(c => c.academicYear === academicYear);
+    }
+    return result;
   }
 
   try {
     let q = query(collection(db, 'classes'));
-    if (departmentId && academicYear) {
+    if (departmentId && academicYear && (!cachedClasses || forceRefresh)) {
       q = query(collection(db, 'classes'), where('departmentId', '==', departmentId), where('academicYear', '==', academicYear));
-    } else if (departmentId) {
+    } else if (departmentId && (!cachedClasses || forceRefresh)) {
       q = query(collection(db, 'classes'), where('departmentId', '==', departmentId));
     }
     const snap = await getDocs(q);
@@ -45,7 +76,7 @@ export async function getAllClasses(departmentId?: string, academicYear?: string
     return result;
   } catch (err) {
     console.error('Error fetching classes:', err);
-    return [];
+    return cachedClasses ? getCachedClasses(departmentId, academicYear) || [] : [];
   }
 }
 

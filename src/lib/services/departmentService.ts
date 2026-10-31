@@ -6,11 +6,30 @@ import { logAdminAction } from './auditService';
 // In-memory cache for fast responsive navigation
 let cachedDepartments: Department[] | null = null;
 let cacheTime = 0;
-const CACHE_TTL_MS = 15000; // 15 seconds
+const CACHE_TTL_MS = 60000; // 60 seconds (revalidated on mutation or expiration)
 
 export function invalidateDepartmentCache() {
   cachedDepartments = null;
   cacheTime = 0;
+}
+
+export function getCachedDepartments(): Department[] | null {
+  if (cachedDepartments && (Date.now() - cacheTime < CACHE_TTL_MS)) {
+    return cachedDepartments;
+  }
+  return null;
+}
+
+export function getCachedDepartmentCounts(): { total: number; active: number; archived: number } | null {
+  const depts = getCachedDepartments();
+  if (!depts) return null;
+  let active = 0;
+  let archived = 0;
+  depts.forEach(d => {
+    if (d.status === 'ACTIVE') active++;
+    else archived++;
+  });
+  return { total: depts.length, active, archived };
 }
 
 export async function getAllDepartments(forceRefresh = false): Promise<Department[]> {
@@ -27,11 +46,17 @@ export async function getAllDepartments(forceRefresh = false): Promise<Departmen
     return result;
   } catch (err) {
     console.error('Error fetching departments:', err);
-    return [];
+    return cachedDepartments || [];
   }
 }
 
 export async function getDepartmentById(departmentId: string): Promise<Department | null> {
+  // Check memory cache first
+  if (cachedDepartments && (Date.now() - cacheTime < CACHE_TTL_MS)) {
+    const found = cachedDepartments.find(d => d.departmentId === departmentId);
+    if (found) return found;
+  }
+
   try {
     const snap = await getDoc(doc(db, 'departments', departmentId));
     if (snap.exists()) {

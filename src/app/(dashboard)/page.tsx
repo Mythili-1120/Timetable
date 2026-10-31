@@ -2,12 +2,12 @@
 
 import React, { useEffect, useState } from 'react';
 import Link from 'next/link';
-import { getDepartmentCounts } from '../../lib/services/departmentService';
-import { getGlobalStaffCounts } from '../../lib/services/staffService';
-import { getGlobalSubjectCounts } from '../../lib/services/subjectService';
-import { getGlobalClassCounts } from '../../lib/services/classService';
-import { getPublishedTimetableStats } from '../../lib/services/timetableService';
-import { getCollegeSettings } from '../../lib/services/settingsService';
+import { getDepartmentCounts, getCachedDepartmentCounts } from '../../lib/services/departmentService';
+import { getGlobalStaffCounts, getCachedGlobalStaffCounts } from '../../lib/services/staffService';
+import { getGlobalSubjectCounts, getCachedGlobalSubjectCounts } from '../../lib/services/subjectService';
+import { getGlobalClassCounts, getCachedGlobalClassCounts } from '../../lib/services/classService';
+import { getPublishedTimetableStats, getCachedPublishedTimetableStats } from '../../lib/services/timetableService';
+import { getCollegeSettings, getCachedCollegeSettings } from '../../lib/services/settingsService';
 import { CollegeSettings } from '../../types';
 import {
   Building2,
@@ -21,13 +21,20 @@ import {
 } from 'lucide-react';
 
 export default function DashboardPage() {
-  const [deptCounts, setDeptCounts] = useState({ total: 0, active: 0, archived: 0 });
-  const [staffCounts, setStaffCounts] = useState({ total: 0, active: 0, archived: 0 });
-  const [subjectCounts, setSubjectCounts] = useState({ total: 0, active: 0, theory: 0, lab: 0 });
-  const [classCounts, setClassCounts] = useState({ total: 0, active: 0 });
-  const [timetableStats, setTimetableStats] = useState({ totalPublishedVersions: 0, uniqueClassesWithTimetable: 0 });
-  const [settings, setSettings] = useState<CollegeSettings | null>(null);
-  const [loading, setLoading] = useState(true);
+  const initDepts = getCachedDepartmentCounts();
+  const initStaff = getCachedGlobalStaffCounts();
+  const initSubjs = getCachedGlobalSubjectCounts();
+  const initClass = getCachedGlobalClassCounts();
+  const initTT = getCachedPublishedTimetableStats();
+  const initSettings = getCachedCollegeSettings();
+
+  const [deptCounts, setDeptCounts] = useState(() => initDepts || { total: 0, active: 0, archived: 0 });
+  const [staffCounts, setStaffCounts] = useState(() => initStaff || { total: 0, active: 0, archived: 0 });
+  const [subjectCounts, setSubjectCounts] = useState(() => initSubjs || { total: 0, active: 0, theory: 0, lab: 0 });
+  const [classCounts, setClassCounts] = useState(() => initClass || { total: 0, active: 0 });
+  const [timetableStats, setTimetableStats] = useState(() => initTT || { totalPublishedVersions: 0, uniqueClassesWithTimetable: 0 });
+  const [settings, setSettings] = useState<CollegeSettings | null>(() => initSettings);
+  const [loading, setLoading] = useState(() => !initDepts);
 
   useEffect(() => {
     async function loadData() {
