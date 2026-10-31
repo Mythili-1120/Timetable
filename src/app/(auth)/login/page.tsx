@@ -28,9 +28,9 @@ export default function LoginPage() {
 
   useEffect(() => {
     if (user && isAdmin) {
-      router.replace('/');
+      window.location.replace('/');
     }
-  }, [user, isAdmin, router]);
+  }, [user, isAdmin]);
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -43,7 +43,7 @@ export default function LoginPage() {
     setSubmitting(false);
 
     if (result.success) {
-      router.replace('/');
+      window.location.replace('/');
     } else {
       setError(result.error || 'Authentication failed. Please verify credentials.');
     }

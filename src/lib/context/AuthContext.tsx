@@ -22,7 +22,7 @@ interface AuthContextType {
 
 const SESSION_KEY = 'ssm_admin_session';
 
-function getStoredSession(): UserProfile | null {
+export function getStoredSession(): UserProfile | null {
   if (typeof window === 'undefined') return null;
   try {
     const raw = localStorage.getItem(SESSION_KEY) || sessionStorage.getItem(SESSION_KEY);
@@ -37,7 +37,7 @@ function getStoredSession(): UserProfile | null {
   return null;
 }
 
-function storeSession(profile: UserProfile | null) {
+export function storeSession(profile: UserProfile | null) {
   if (typeof window === 'undefined') return;
   try {
     if (profile && profile.role === 'ADMIN') {
@@ -52,6 +52,22 @@ function storeSession(profile: UserProfile | null) {
   }
 }
 
+export function hasStoredAuth(): boolean {
+  if (typeof window === 'undefined') return false;
+  try {
+    if (localStorage.getItem(SESSION_KEY) || sessionStorage.getItem(SESSION_KEY)) return true;
+    for (let i = 0; i < localStorage.length; i++) {
+      const key = localStorage.key(i);
+      if (key && (key.startsWith('firebase:authUser') || key.startsWith('firebase:token'))) {
+        return true;
+      }
+    }
+  } catch {
+    // Storage restricted
+  }
+  return false;
+}
+
 const AuthContext = createContext<AuthContextType>({
   user: null,
   userProfile: null,
@@ -62,21 +78,38 @@ const AuthContext = createContext<AuthContextType>({
 });
 
 export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
-  const cachedProfile = getStoredSession();
-  const [user, setUser] = useState<User | null>(() => auth.currentUser || null);
-  const [userProfile, setUserProfile] = useState<UserProfile | null>(() => cachedProfile);
-  const [loading, setLoading] = useState<boolean>(() => !(cachedProfile && cachedProfile.role === 'ADMIN'));
+  const [user, setUser] = useState<User | null>(null);
+  const [userProfile, setUserProfile] = useState<UserProfile | null>(null);
+  const [loading, setLoading] = useState<boolean>(true);
 
   useEffect(() => {
     let isMounted = true;
     let timeoutId: NodeJS.Timeout | null = null;
 
-    // Safety timeout: Never leave loading stuck true for more than 2.5 seconds
-    timeoutId = setTimeout(() => {
-      if (isMounted) {
-        setLoading(false);
-      }
-    }, 2500);
+    // Immediately restore cached admin profile on client mount
+    const cachedProfile = getStoredSession();
+    if (cachedProfile && cachedProfile.role === 'ADMIN') {
+      setUserProfile(cachedProfile);
+      setLoading(false);
+    } else if (!hasStoredAuth()) {
+      setLoading(false);
+    } else {
+      timeoutId = setTimeout(() => {
+        if (isMounted) {
+          setLoading(false);
+        }
+      }, 2000);
+    }
+    if (!hasStoredAuth()) {
+      setLoading(false);
+    } else {
+      // Safety timeout: never hang loading for more than 2 seconds
+      timeoutId = setTimeout(() => {
+        if (isMounted) {
+          setLoading(false);
+        }
+      }, 2000);
+    }
 
     const unsubscribe = onAuthStateChanged(auth, async (currentUser) => {
       if (!isMounted) return;
@@ -140,8 +173,11 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
           }
         }
       } else {
-        setUserProfile(null);
-        storeSession(null);
+        // Only wipe profile if we do not have an active stored session being hydrated
+        const stored = getStoredSession();
+        if (!stored) {
+          setUserProfile(null);
+        }
       }
 
       if (isMounted) {
@@ -237,6 +273,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     } catch (err) {
       console.error('Sign out error:', err);
     }
+    window.location.replace('/login');
   };
 
   const isAdmin = userProfile?.role === 'ADMIN';
