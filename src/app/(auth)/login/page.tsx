@@ -28,7 +28,7 @@ export default function LoginPage() {
 
   useEffect(() => {
     if (user && isAdmin) {
-      router.push('/');
+      router.replace('/');
     }
   }, [user, isAdmin, router]);
 
@@ -43,7 +43,7 @@ export default function LoginPage() {
     setSubmitting(false);
 
     if (result.success) {
-      router.push('/');
+      router.replace('/');
     } else {
       setError(result.error || 'Authentication failed. Please verify credentials.');
     }

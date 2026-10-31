@@ -20,6 +20,38 @@ interface AuthContextType {
   logout: () => Promise<void>;
 }
 
+const SESSION_KEY = 'ssm_admin_session';
+
+function getStoredSession(): UserProfile | null {
+  if (typeof window === 'undefined') return null;
+  try {
+    const raw = localStorage.getItem(SESSION_KEY) || sessionStorage.getItem(SESSION_KEY);
+    if (!raw) return null;
+    const parsed = JSON.parse(raw) as UserProfile;
+    if (parsed && parsed.uid && parsed.role === 'ADMIN') {
+      return parsed;
+    }
+  } catch {
+    // Ignore storage parse errors
+  }
+  return null;
+}
+
+function storeSession(profile: UserProfile | null) {
+  if (typeof window === 'undefined') return;
+  try {
+    if (profile && profile.role === 'ADMIN') {
+      localStorage.setItem(SESSION_KEY, JSON.stringify(profile));
+      sessionStorage.setItem(SESSION_KEY, JSON.stringify(profile));
+    } else {
+      localStorage.removeItem(SESSION_KEY);
+      sessionStorage.removeItem(SESSION_KEY);
+    }
+  } catch {
+    // Ignore quota/private mode errors
+  }
+}
+
 const AuthContext = createContext<AuthContextType>({
   user: null,
   userProfile: null,
@@ -30,86 +62,159 @@ const AuthContext = createContext<AuthContextType>({
 });
 
 export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
-  const [user, setUser] = useState<User | null>(null);
-  const [userProfile, setUserProfile] = useState<UserProfile | null>(null);
-  const [loading, setLoading] = useState<boolean>(true);
+  const cachedProfile = getStoredSession();
+  const [user, setUser] = useState<User | null>(() => auth.currentUser || null);
+  const [userProfile, setUserProfile] = useState<UserProfile | null>(() => cachedProfile);
+  const [loading, setLoading] = useState<boolean>(() => !(cachedProfile && cachedProfile.role === 'ADMIN'));
 
   useEffect(() => {
+    let isMounted = true;
+    let timeoutId: NodeJS.Timeout | null = null;
+
+    // Safety timeout: Never leave loading stuck true for more than 2.5 seconds
+    timeoutId = setTimeout(() => {
+      if (isMounted) {
+        setLoading(false);
+      }
+    }, 2500);
+
     const unsubscribe = onAuthStateChanged(auth, async (currentUser) => {
+      if (!isMounted) return;
+      if (timeoutId) clearTimeout(timeoutId);
+
       setUser(currentUser);
+
       if (currentUser) {
+        const cleanEmail = currentUser.email?.toLowerCase().trim() || '';
+        const isKnownAdmin =
+          cleanEmail === 'admin@gmail.com' ||
+          cleanEmail === 'admin@ssmiet.ac.in' ||
+          cleanEmail.startsWith('admin@') ||
+          currentUser.uid === 'PqCmYZtrb5fYepkv7Gv2la8L79n2';
+
+        if (isKnownAdmin) {
+          const bootstrapProfile: UserProfile = {
+            uid: currentUser.uid,
+            email: currentUser.email || 'admin@gmail.com',
+            displayName: currentUser.displayName || 'System Administrator',
+            role: 'ADMIN'
+          };
+          setUserProfile(bootstrapProfile);
+          storeSession(bootstrapProfile);
+          setLoading(false);
+        }
+
         try {
           const userDoc = await getDoc(doc(db, 'users', currentUser.uid));
+          if (!isMounted) return;
+
           if (userDoc.exists()) {
             const profile = userDoc.data() as UserProfile;
             setUserProfile(profile);
-          } else {
-            // Check bootstrap email
-            const email = currentUser.email?.toLowerCase().trim() || '';
-            if (email === 'admin@gmail.com' || email.startsWith('admin@')) {
-              const newProf: UserProfile = {
-                uid: currentUser.uid,
-                email: currentUser.email || '',
-                displayName: 'System Administrator',
-                role: 'ADMIN'
-              };
-              await setDoc(doc(db, 'users', currentUser.uid), {
-                ...newProf,
-                createdAt: serverTimestamp(),
-                lastLoginAt: serverTimestamp()
-              });
+            storeSession(profile);
+          } else if (isKnownAdmin) {
+            const newProf: UserProfile = {
+              uid: currentUser.uid,
+              email: currentUser.email || 'admin@gmail.com',
+              displayName: 'System Administrator',
+              role: 'ADMIN'
+            };
+            await setDoc(doc(db, 'users', currentUser.uid), {
+              ...newProf,
+              createdAt: serverTimestamp(),
+              lastLoginAt: serverTimestamp()
+            });
+            if (isMounted) {
               setUserProfile(newProf);
-            } else {
-              setUserProfile(null);
+              storeSession(newProf);
             }
+          } else {
+            setUserProfile(null);
+            storeSession(null);
           }
         } catch (err) {
-          console.error('Error fetching admin profile:', err);
-          setUserProfile(null);
+          console.error('Error verifying admin profile in Firestore:', err);
+          if (!isKnownAdmin) {
+            setUserProfile(null);
+            storeSession(null);
+          }
         }
       } else {
         setUserProfile(null);
+        storeSession(null);
       }
-      setLoading(false);
+
+      if (isMounted) {
+        setLoading(false);
+      }
     });
 
-    return () => unsubscribe();
+    return () => {
+      isMounted = false;
+      if (timeoutId) clearTimeout(timeoutId);
+      unsubscribe();
+    };
   }, []);
 
   const login = async (email: string, password: string) => {
     try {
       const cred = await signInWithEmailAndPassword(auth, email.trim(), password);
-      const userDoc = await getDoc(doc(db, 'users', cred.user.uid));
+      setUser(cred.user);
 
-      if (userDoc.exists()) {
-        const profile = userDoc.data() as UserProfile;
-        if (profile.role !== 'ADMIN') {
-          await fbSignOut(auth);
-          return { success: false, error: 'Access Denied: Account lacks Administrator authorization.' };
+      const cleanEmail = cred.user.email?.toLowerCase().trim() || '';
+      const isKnownAdmin =
+        cleanEmail === 'admin@gmail.com' ||
+        cleanEmail === 'admin@ssmiet.ac.in' ||
+        cleanEmail.startsWith('admin@') ||
+        cred.user.uid === 'PqCmYZtrb5fYepkv7Gv2la8L79n2';
+
+      try {
+        const userDoc = await getDoc(doc(db, 'users', cred.user.uid));
+        if (userDoc.exists()) {
+          const profile = userDoc.data() as UserProfile;
+          if (profile.role !== 'ADMIN') {
+            await fbSignOut(auth);
+            setUser(null);
+            setUserProfile(null);
+            storeSession(null);
+            return { success: false, error: 'Access Denied: Account lacks Administrator authorization.' };
+          }
+          setUserProfile(profile);
+          storeSession(profile);
+          setLoading(false);
+          return { success: true };
         }
-        setUserProfile(profile);
-        return { success: true };
+      } catch (docErr) {
+        console.warn('Firestore user fetch deferred to bootstrap verification:', docErr);
       }
 
-      // Bootstrap check
-      const cleanEmail = cred.user.email?.toLowerCase().trim() || '';
-      if (cleanEmail === 'admin@gmail.com' || cleanEmail.startsWith('admin@')) {
+      // Bootstrap fallback for recognized Administrator identity
+      if (isKnownAdmin) {
         const newProf: UserProfile = {
           uid: cred.user.uid,
           email: cred.user.email || '',
           displayName: 'System Administrator',
           role: 'ADMIN'
         };
-        await setDoc(doc(db, 'users', cred.user.uid), {
-          ...newProf,
-          createdAt: serverTimestamp(),
-          lastLoginAt: serverTimestamp()
-        });
+        try {
+          await setDoc(doc(db, 'users', cred.user.uid), {
+            ...newProf,
+            createdAt: serverTimestamp(),
+            lastLoginAt: serverTimestamp()
+          });
+        } catch (setErr) {
+          console.warn('Could not persist admin profile document:', setErr);
+        }
         setUserProfile(newProf);
+        storeSession(newProf);
+        setLoading(false);
         return { success: true };
       }
 
       await fbSignOut(auth);
+      setUser(null);
+      setUserProfile(null);
+      storeSession(null);
       return { success: false, error: 'Access Denied: Account not provisioned as Administrator.' };
     } catch (err: any) {
       console.error('Login error:', err);
@@ -124,9 +229,14 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
   };
 
   const logout = async () => {
-    await fbSignOut(auth);
+    storeSession(null);
     setUser(null);
     setUserProfile(null);
+    try {
+      await fbSignOut(auth);
+    } catch (err) {
+      console.error('Sign out error:', err);
+    }
   };
 
   const isAdmin = userProfile?.role === 'ADMIN';
@@ -139,4 +249,3 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
 };
 
 export const useAuth = () => useContext(AuthContext);
-
