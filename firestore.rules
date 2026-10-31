@@ -1,0 +1,263 @@
+rules_version = '2';
+
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    // ===============================================================
+    // SSM College Timetable Management System
+    // Production Cloud Firestore Security Rules
+    // Master Rebuild Architecture (Next.js & Global Staff Model)
+    // Project Target: timetable-76d9f
+    // Administrator UID: PqCmYZtrb5fYepkv7Gv2la8L79n2
+    // Administrator Email: admin@gmail.com
+    // ===============================================================
+    //
+    // Assumed Data Model:
+    //
+    // Collection: /collegeSettings/{settingsId}
+    // Document ID: settings identifier (e.g. 'default', 'staffSequence')
+    // Fields:
+    //   - 'default': collegeName (string), collegeShortName (string), address (string),
+    //                workingDays (list), startTime (string), endTime (string),
+    //                periodDurationMinutes (int), periods (list of maps), updatedAt, updatedBy
+    //   - 'staffSequence': lastSequence (int), prefix (string), updatedAt (string)
+    //
+    // Collection: /users/{userId}
+    // Document ID: Firebase Auth UID
+    // Fields: uid (string, immutable), email (string), displayName (string),
+    //         role (string: 'ADMIN' | 'UNAUTHORIZED'), createdAt (immutable), lastLoginAt
+    //
+    // Collection: /departments/{departmentId}
+    // Document ID: 'dept-' + lowercase code (e.g. 'dept-aids')
+    // Fields: departmentId (string), code (string), name (string), status (string: 'ACTIVE' | 'ARCHIVED'),
+    //         createdAt (string), updatedAt (string), archivedAt (optional string)
+    //
+    // Collection: /staff/{memberId}
+    // Document ID: Permanent Member ID matching '^FAC-[0-9]+$' (e.g. 'FAC-000101')
+    // Fields: memberId (string, immutable), staffName (string), initials (string),
+    //         displayName (string), email (string), phone (string), designation (string),
+    //         primaryDepartmentId (string), status (string: 'ACTIVE' | 'INACTIVE'),
+    //         createdAt (string, immutable), updatedAt (string), archivedAt (optional string)
+    //
+    // Collection: /staffDepartmentLinks/{linkId}
+    // Document ID: memberId + '_' + departmentId
+    // Fields: linkId (string), memberId (string), departmentId (string),
+    //         status (string: 'ACTIVE' | 'INACTIVE'), createdAt (string)
+    //
+    // Collection: /subjects/{subjectId}
+    // Document ID: 'SUBJ-' + deptCode + '-' + subjectCode
+    // Fields: subjectId (string), code (string), name (string), type (string: 'Theory' | 'Lab'),
+    //         weeklyHours (number), labBlockHours (optional number), departmentId (string),
+    //         academicYear (string), status (string: 'ACTIVE' | 'INACTIVE'), createdAt, updatedAt
+    //
+    // Collection: /classes/{classId}
+    // Document ID: departmentId + '_' + academicYear + '_' + yearOfStudy + '_' + section
+    // Fields: classId (string), departmentId (string), academicYear (string),
+    //         yearOfStudy (string), section (string), strength (optional number),
+    //         status (string: 'ACTIVE' | 'INACTIVE'), createdAt, updatedAt
+    //
+    // Collection: /teachingAssignments/{assignmentId}
+    // Document ID: 'asgn_' + classId + '_' + subjectId + '_' + memberId
+    // Fields: assignmentId (string), memberId (string), departmentId (string),
+    //         subjectId (string), classId (string), weeklyHours (number),
+    //         type (string: 'Theory' | 'Lab'), status (string: 'ACTIVE' | 'INACTIVE'),
+    //         createdAt, updatedAt
+    //
+    // Collection: /timetables/{timetableId}
+    // Document ID: classId
+    // Fields: classId (string), departmentId (string), academicYear (string),
+    //         grid (list of lists of slot maps), totalAllocated (number),
+    //         status (string: 'DRAFT' | 'GENERATED' | 'PUBLISHED'), updatedAt (string)
+    //
+    // Collection: /publishedTimetables/{timetableId}
+    // Document ID: 'pub_' + classId + '_v' + versionNumber
+    // Fields: timetableId (string), versionNumber (number), classId (string), classLabel (string),
+    //         departmentId (string), academicYear (string), grid (list), allocations (list),
+    //         totalHours (number), publishedAt (string), publishedBy (string)
+    //
+    // Collection: /auditLogs/{logId}
+    // Document ID: auto-generated document ID
+    // Fields: logId (optional string), adminUid (string), action (string), entity (string),
+    //         entityId (string), details (optional map), timestamp (string), createdAt
+    //
+    // Collection: /counters/{counterId}
+    // Document ID: counter name identifier
+    // Fields: lastSequence (number), prefix (string), updatedAt
+    //
+    // ===============================================================
+
+    // Root Rule: Default Deny All Access
+    match /{document=**} {
+      allow read, write: if false;
+    }
+
+    // ---------------------------------------------------------------
+    // Helper Functions
+    // ---------------------------------------------------------------
+
+    function isAuthenticated() {
+      return request.auth != null;
+    }
+
+    function isOwner(userId) {
+      return isAuthenticated() && request.auth.uid == userId;
+    }
+
+    function isAdmin() {
+      return isAuthenticated() && (
+        ('email' in request.auth.token && request.auth.token.email in ['admin@gmail.com', 'admin@ssmiet.ac.in']) ||
+        request.auth.uid == 'PqCmYZtrb5fYepkv7Gv2la8L79n2' ||
+        ('role' in request.auth.token && request.auth.token.role == 'ADMIN') ||
+        ('admin' in request.auth.token && request.auth.token.admin == true) ||
+        (
+          exists(/databases/$(database)/documents/users/$(request.auth.uid)) &&
+          'role' in get(/databases/$(database)/documents/users/$(request.auth.uid)).data &&
+          get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role == 'ADMIN'
+        )
+      );
+    }
+
+    function isValidEmail(email) {
+      return email is string &&
+        email.size() <= 100 &&
+        email.matches('^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\\.[a-zA-Z]{2,}$');
+    }
+
+    function isBootstrapAdminEmail(email) {
+      return email is string && (
+        email in ['admin@gmail.com', 'admin@ssmiet.ac.in'] ||
+        email.matches('^admin@.*')
+      );
+    }
+
+    function areImmutableFieldsUnchanged(fields) {
+      return !request.resource.data.diff(resource.data).affectedKeys().hasAny(fields);
+    }
+
+    // ---------------------------------------------------------------
+    // 1. College Settings (/collegeSettings/{settingsId})
+    // ---------------------------------------------------------------
+    match /collegeSettings/{settingsId} {
+      allow read: if isAuthenticated();
+      allow create, update: if isAdmin();
+      allow delete: if false; // College settings cannot be destroyed
+    }
+
+    // ---------------------------------------------------------------
+    // 2. User Profiles Collection (/users/{userId})
+    // ---------------------------------------------------------------
+    match /users/{userId} {
+      allow read: if isOwner(userId) || isAdmin();
+
+      allow create: if (isOwner(userId) || isAdmin()) &&
+                       request.resource.data.uid == userId &&
+                       request.resource.data.email is string &&
+                       isValidEmail(request.resource.data.email) &&
+                       (
+                         request.resource.data.role != 'ADMIN' ||
+                         isAdmin() ||
+                         (isOwner(userId) && 'email' in request.auth.token && isBootstrapAdminEmail(request.auth.token.email))
+                       );
+
+      allow update: if (isOwner(userId) || isAdmin()) &&
+                       (!('uid' in request.resource.data) || request.resource.data.uid == resource.data.uid) &&
+                       areImmutableFieldsUnchanged(['uid', 'createdAt']) &&
+                       (request.resource.data.role == resource.data.role || isAdmin());
+
+      allow delete: if isAdmin();
+    }
+
+    // ---------------------------------------------------------------
+    // 3. Department Master (/departments/{departmentId})
+    // ---------------------------------------------------------------
+    match /departments/{departmentId} {
+      allow read: if isAuthenticated();
+      allow create, update, delete: if isAdmin();
+    }
+
+    // ---------------------------------------------------------------
+    // 4. Global Staff Master (/staff/{memberId})
+    // ---------------------------------------------------------------
+    match /staff/{memberId} {
+      allow read: if isAuthenticated();
+      allow create: if isAdmin() &&
+                       memberId.matches('^FAC-[0-9]+$') &&
+                       request.resource.data.memberId == memberId &&
+                       request.resource.data.staffName is string &&
+                       request.resource.data.staffName.size() > 0 &&
+                       request.resource.data.staffName.size() <= 100 &&
+                       request.resource.data.status in ['ACTIVE', 'INACTIVE'];
+      allow update: if isAdmin() &&
+                       areImmutableFieldsUnchanged(['memberId', 'createdAt']) &&
+                       (!('staffName' in request.resource.data) || (request.resource.data.staffName is string && request.resource.data.staffName.size() <= 100)) &&
+                       (!('status' in request.resource.data) || request.resource.data.status in ['ACTIVE', 'INACTIVE']);
+      allow delete: if false; // Enforce safe soft-archival (status: INACTIVE)
+    }
+
+    // ---------------------------------------------------------------
+    // 5. Multi-Department Staff Links (/staffDepartmentLinks/{linkId})
+    // ---------------------------------------------------------------
+    match /staffDepartmentLinks/{linkId} {
+      allow read: if isAuthenticated();
+      allow create, update, delete: if isAdmin();
+    }
+
+    // ---------------------------------------------------------------
+    // 6. Subject Master (/subjects/{subjectId})
+    // ---------------------------------------------------------------
+    match /subjects/{subjectId} {
+      allow read: if isAuthenticated();
+      allow create, update, delete: if isAdmin();
+    }
+
+    // ---------------------------------------------------------------
+    // 7. Classes and Sections (/classes/{classId})
+    // ---------------------------------------------------------------
+    match /classes/{classId} {
+      allow read: if isAuthenticated();
+      allow create, update, delete: if isAdmin();
+    }
+
+    // ---------------------------------------------------------------
+    // 8. Teaching Assignments (/teachingAssignments/{assignmentId})
+    // ---------------------------------------------------------------
+    match /teachingAssignments/{assignmentId} {
+      allow read: if isAuthenticated();
+      allow create, update, delete: if isAdmin();
+    }
+
+    // ---------------------------------------------------------------
+    // 9. Active Working Timetables (/timetables/{timetableId})
+    // ---------------------------------------------------------------
+    match /timetables/{timetableId} {
+      allow read: if isAuthenticated();
+      allow create, update, delete: if isAdmin();
+    }
+
+    // ---------------------------------------------------------------
+    // 10. Published & Historical Timetables (/publishedTimetables/{timetableId})
+    // ---------------------------------------------------------------
+    match /publishedTimetables/{timetableId} {
+      allow read: if isAuthenticated();
+      allow create: if isAdmin();
+      allow update, delete: if false; // Published versions are immutable historical snapshots
+    }
+
+    // ---------------------------------------------------------------
+    // 11. Audit Logging (/auditLogs/{logId})
+    // Database storage of audit logs removed per production specification
+    // ---------------------------------------------------------------
+    match /auditLogs/{logId} {
+      allow read, write: if false; // Disabled
+    }
+
+    // ---------------------------------------------------------------
+    // 12. Atomic Sequence Counters (/counters/{counterId})
+    // ---------------------------------------------------------------
+    match /counters/{counterId} {
+      allow read: if isAuthenticated();
+      allow create, update: if isAdmin();
+      allow delete: if false; // Sequence counters must never be deleted
+    }
+  }
+}
