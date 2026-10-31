@@ -19,6 +19,7 @@ import {
 } from '../../../lib/services/subjectService';
 import { Department } from '../../../types';
 import { useAuth } from '../../../lib/context/AuthContext';
+import DepartmentIcon from '../../../components/DepartmentIcon';
 import {
   Building2,
   Plus,
@@ -28,11 +29,7 @@ import {
   ArrowRight,
   Edit2,
   Archive,
-  CheckCircle2,
-  GraduationCap,
-  Check,
-  Layers,
-  Sparkles
+  GraduationCap
 } from 'lucide-react';
 
 export default function DepartmentsPage() {
@@ -201,51 +198,6 @@ export default function DepartmentsPage() {
     return { completed, total: 4, nextStep };
   };
 
-  // Global guide calculations
-  const totalFacultyCount = Array.from(deptStaffCounts.values()).reduce((a, b) => a + b, 0);
-  const totalSubjectCount = Array.from(deptSubjectCounts.values()).reduce((a, b) => a + b, 0);
-
-  const guideSteps = [
-    {
-      num: 1,
-      title: 'Add faculty',
-      desc: 'Create faculty profiles and assign their primary departments',
-      done: totalFacultyCount > 0
-    },
-    {
-      num: 2,
-      title: 'Add subjects',
-      desc: 'Define curriculum with theory, lab, and elective subjects',
-      done: totalSubjectCount > 0
-    },
-    {
-      num: 3,
-      title: 'Create class sections',
-      desc: 'Set up academic years, semesters, and student batches',
-      done: departments.length > 0 && totalSubjectCount > 0
-    },
-    {
-      num: 4,
-      title: 'Map faculty to subjects',
-      desc: 'Assign faculty members to their respective subjects and classes',
-      done: totalFacultyCount > 0 && totalSubjectCount > 0
-    },
-    {
-      num: 5,
-      title: 'Generate timetable',
-      desc: 'Run conflict-free scheduling and publish semester timetables',
-      done: totalFacultyCount >= 4 && totalSubjectCount >= 6
-    }
-  ];
-
-  const guideCompletedCount = guideSteps.filter((s) => s.done).length;
-  const activeDeptsCount = departments.filter((d) => d.status === 'ACTIVE').length;
-  const completedDeptsCount = departments.filter((d) => {
-    const st = deptStaffCounts.get(d.departmentId) || 0;
-    const sub = deptSubjectCounts.get(d.departmentId) || 0;
-    return st > 0 && sub > 0;
-  }).length;
-
   return (
     <div className="space-y-6">
       {/* 1. HERO BANNER - Exact SSM Reference Style */}
@@ -340,19 +292,13 @@ export default function DepartmentsPage() {
 
       {/* 3. LOADING SKELETONS */}
       {loading && (
-        <div className="grid grid-cols-1 lg:grid-cols-12 gap-6 items-start">
-          <div className="lg:col-span-8 space-y-4">
-            {[1, 2, 3].map((i) => (
-              <div
-                key={i}
-                className="h-36 rounded-2xl bg-white border border-[#E3E5F0] animate-pulse p-6"
-              />
-            ))}
-          </div>
-          <div className="lg:col-span-4 space-y-4">
-            <div className="h-64 rounded-2xl bg-white border border-[#E3E5F0] animate-pulse p-6" />
-            <div className="h-28 rounded-2xl bg-white border border-[#E3E5F0] animate-pulse p-6" />
-          </div>
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+          {[1, 2, 3, 4].map((i) => (
+            <div
+              key={i}
+              className="h-44 rounded-2xl bg-white border border-[#E3E5F0] animate-pulse p-5"
+            />
+          ))}
         </div>
       )}
 
@@ -391,11 +337,10 @@ export default function DepartmentsPage() {
         </div>
       )}
 
-      {/* 6. MAIN 2-COLUMN BODY LAYOUT */}
+      {/* 6. MAIN FULL-WIDTH TWO-COLUMN DEPARTMENT GRID */}
       {!loading && filteredDepts.length > 0 && (
-        <div className="grid grid-cols-1 lg:grid-cols-12 gap-6 items-start">
-          {/* LEFT COLUMN: Department Cards List + Add Card */}
-          <div className="lg:col-span-8 space-y-4">
+        <div className="space-y-4">
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
             {filteredDepts.map((dept) => {
               const deptStaffCount = deptStaffCounts.get(dept.departmentId) || 0;
               const deptSubjectCount = deptSubjectCounts.get(dept.departmentId) || 0;
@@ -405,15 +350,19 @@ export default function DepartmentsPage() {
               return (
                 <div
                   key={dept.departmentId}
-                  className={`bg-white rounded-2xl border border-[#E3E5F0] p-5 shadow-xs hover:shadow-md transition-all duration-200 flex flex-col md:flex-row md:items-center justify-between gap-5 ${
+                  className={`bg-white rounded-2xl border border-[#E3E5F0] p-5 shadow-xs hover:shadow-md transition-all duration-200 flex flex-col justify-between gap-4 ${
                     isArchived ? 'opacity-75' : ''
                   }`}
                 >
-                  {/* Left Cluster: Icon + Details + Progress */}
-                  <div className="flex items-start gap-4 min-w-0 flex-1">
-                    {/* Big Department Icon Badge */}
-                    <div className="w-14 h-14 sm:w-16 sm:h-16 rounded-2xl bg-gradient-to-br from-[#3B34C4] to-[#251F91] text-white flex items-center justify-center font-extrabold text-sm sm:text-base tracking-wider shadow-inner shrink-0 mt-0.5">
-                      {dept.code.slice(0, 4)}
+                  {/* Top Cluster: Department Icon + Details + Progress */}
+                  <div className="flex items-start gap-4 min-w-0">
+                    {/* Big Department Icon Badge with Automatic Dynamic Icon */}
+                    <div className="w-14 h-14 sm:w-16 sm:h-16 rounded-2xl bg-gradient-to-br from-[#3B34C4] to-[#251F91] text-white flex items-center justify-center shadow-inner shrink-0 mt-0.5">
+                      <DepartmentIcon
+                        name={dept.name}
+                        code={dept.code}
+                        className="w-7 h-7 sm:w-8 sm:h-8 text-white stroke-[2]"
+                      />
                     </div>
 
                     <div className="min-w-0 flex-1">
@@ -442,7 +391,7 @@ export default function DepartmentsPage() {
                       </div>
 
                       {/* Description */}
-                      <p className="text-xs text-slate-500 line-clamp-1 mb-3">
+                      <p className="text-xs text-slate-500 line-clamp-2 mb-3">
                         {dept.description ||
                           'Undergraduate and postgraduate engineering degree programs with autonomous curriculum.'}
                       </p>
@@ -487,146 +436,59 @@ export default function DepartmentsPage() {
                     </div>
                   </div>
 
-                  {/* Right Action Side: Open Button + Edit/Archive + ID */}
-                  <div className="flex md:flex-col items-center md:items-end justify-between md:justify-center gap-2 shrink-0 border-t md:border-t-0 pt-3 md:pt-0 border-slate-100">
+                  {/* Bottom Action Footer Row */}
+                  <div className="flex items-center justify-between pt-3 border-t border-slate-100 mt-1">
+                    <div className="flex items-center gap-2">
+                      <span className="font-mono text-[10px] text-slate-400">
+                        ID: {dept.departmentId}
+                      </span>
+                      <div className="flex items-center gap-1">
+                        <button
+                          onClick={(e) => openEdit(e, dept)}
+                          className="p-1.5 text-slate-400 hover:text-[#3431B7] hover:bg-slate-50 rounded-lg transition-colors cursor-pointer"
+                          title="Edit Department"
+                        >
+                          <Edit2 className="w-4 h-4" />
+                        </button>
+                        <button
+                          onClick={(e) => handleToggleStatus(e, dept)}
+                          className="p-1.5 text-slate-400 hover:text-amber-600 hover:bg-slate-50 rounded-lg transition-colors cursor-pointer"
+                          title={!isArchived ? 'Archive Department' : 'Reactivate Department'}
+                        >
+                          <Archive className="w-4 h-4" />
+                        </button>
+                      </div>
+                    </div>
+
                     <Link
                       href={`/departments/${dept.departmentId}`}
                       prefetch={true}
-                      className="inline-flex items-center justify-center gap-2 px-5 py-2.5 rounded-xl text-xs sm:text-sm font-bold text-white bg-[#3431B7] hover:bg-[#28229E] transition-all shadow-xs cursor-pointer group"
+                      className="inline-flex items-center justify-center gap-2 px-4 py-2 rounded-xl text-xs sm:text-sm font-bold text-white bg-[#3431B7] hover:bg-[#28229E] transition-all shadow-xs cursor-pointer group"
                     >
                       <span>Open</span>
                       <ArrowRight className="w-4 h-4 group-hover:translate-x-0.5 transition-transform" />
                     </Link>
-
-                    <div className="flex items-center gap-1.5">
-                      <button
-                        onClick={(e) => openEdit(e, dept)}
-                        className="p-1.5 text-slate-400 hover:text-[#3431B7] hover:bg-slate-50 rounded-lg transition-colors cursor-pointer"
-                        title="Edit Department"
-                      >
-                        <Edit2 className="w-4 h-4" />
-                      </button>
-                      <button
-                        onClick={(e) => handleToggleStatus(e, dept)}
-                        className="p-1.5 text-slate-400 hover:text-amber-600 hover:bg-slate-50 rounded-lg transition-colors cursor-pointer"
-                        title={!isArchived ? 'Archive Department' : 'Reactivate Department'}
-                      >
-                        <Archive className="w-4 h-4" />
-                      </button>
-                    </div>
-
-                    <span className="font-mono text-[10px] text-slate-400">
-                      ID: {dept.departmentId}
-                    </span>
                   </div>
                 </div>
               );
             })}
-
-            {/* Dashed Add Department Card Button */}
-            <button
-              onClick={() => {
-                setEditingDept(null);
-                setCode('');
-                setName('');
-                setDescription('');
-                setError(null);
-                setModalOpen(true);
-              }}
-              className="w-full border-2 border-dashed border-[#D2D6EC] hover:border-[#3431B7] bg-[#F7F8FD]/60 hover:bg-[#F2F4FD] rounded-2xl p-4 flex items-center justify-center gap-2 transition-all cursor-pointer text-sm font-bold text-[#3431B7]"
-            >
-              <Plus className="w-4 h-4 stroke-[2.5]" />
-              <span>Add another department</span>
-            </button>
           </div>
 
-          {/* RIGHT COLUMN: Guide & Summary Stats (32% width on desktop) */}
-          <div className="lg:col-span-4 space-y-4">
-            {/* Card 1: Set up in 5 easy steps */}
-            <div className="bg-white rounded-2xl border border-[#E3E5F0] p-5 shadow-xs">
-              <div className="flex items-center gap-2 mb-1">
-                <Sparkles className="w-4 h-4 text-[#3431B7]" />
-                <h3 className="text-sm sm:text-base font-extrabold text-slate-900 tracking-tight">
-                  Set up in 5 easy steps
-                </h3>
-              </div>
-              <p className="text-xs text-slate-500 mb-4">
-                Follow them in order to create your first timetable.
-              </p>
-
-              {/* Step Items List */}
-              <div className="space-y-3.5">
-                {guideSteps.map((step) => (
-                  <div key={step.num} className="flex items-start gap-3">
-                    <div
-                      className={`w-6 h-6 rounded-full flex items-center justify-center text-xs font-bold shrink-0 mt-0.5 ${
-                        step.done
-                          ? 'bg-[#EBF8F0] text-[#137A3C] border border-[#CDEED8]'
-                          : 'bg-[#F4F5FB] text-slate-500 border border-[#E3E5F0]'
-                      }`}
-                    >
-                      {step.done ? <Check className="w-3.5 h-3.5 stroke-[2.5]" /> : step.num}
-                    </div>
-                    <div className="min-w-0">
-                      <div className="text-xs font-bold text-slate-900">{step.title}</div>
-                      <div className="text-[11px] text-slate-500 leading-tight mt-0.5">
-                        {step.desc}
-                      </div>
-                    </div>
-                  </div>
-                ))}
-              </div>
-
-              {/* Progress Summary */}
-              <div className="mt-5 pt-4 border-t border-slate-100">
-                <div className="flex items-center justify-between text-xs font-semibold text-slate-700 mb-1.5">
-                  <span>Overall Setup Progress</span>
-                  <span className="text-[#3431B7] font-bold">
-                    {guideCompletedCount} of 5 done
-                  </span>
-                </div>
-                <div className="h-2 w-full bg-[#E3E5F0] rounded-full overflow-hidden">
-                  <div
-                    className="h-full bg-[#3431B7] rounded-full transition-all duration-300"
-                    style={{ width: `${(guideCompletedCount / 5) * 100}%` }}
-                  />
-                </div>
-              </div>
-            </div>
-
-            {/* Card 2: Quick Summary Stats */}
-            <div className="bg-white rounded-2xl border border-[#E3E5F0] p-5 shadow-xs">
-              <div className="text-xs font-bold uppercase tracking-wider text-slate-400 mb-3">
-                Overview
-              </div>
-              <div className="grid grid-cols-3 gap-3 text-center">
-                <div className="p-2.5 rounded-xl bg-[#F4F5FB] border border-[#E3E5F0]">
-                  <div className="text-xl font-extrabold text-slate-900">
-                    {departments.length}
-                  </div>
-                  <div className="text-[10px] font-semibold text-slate-500 mt-0.5">
-                    Departments
-                  </div>
-                </div>
-
-                <div className="p-2.5 rounded-xl bg-[#F4F5FB] border border-[#E3E5F0]">
-                  <div className="text-xl font-extrabold text-[#137A3C]">
-                    {activeDeptsCount}
-                  </div>
-                  <div className="text-[10px] font-semibold text-slate-500 mt-0.5">Active</div>
-                </div>
-
-                <div className="p-2.5 rounded-xl bg-[#F4F5FB] border border-[#E3E5F0]">
-                  <div className="text-xl font-extrabold text-[#3431B7]">
-                    {completedDeptsCount}/{departments.length}
-                  </div>
-                  <div className="text-[10px] font-semibold text-slate-500 mt-0.5">
-                    Setup Done
-                  </div>
-                </div>
-              </div>
-            </div>
-          </div>
+          {/* Dashed Add Department Card Button spanning full width */}
+          <button
+            onClick={() => {
+              setEditingDept(null);
+              setCode('');
+              setName('');
+              setDescription('');
+              setError(null);
+              setModalOpen(true);
+            }}
+            className="w-full border-2 border-dashed border-[#D2D6EC] hover:border-[#3431B7] bg-[#F7F8FD]/60 hover:bg-[#F2F4FD] rounded-2xl p-4 flex items-center justify-center gap-2 transition-all cursor-pointer text-sm font-bold text-[#3431B7]"
+          >
+            <Plus className="w-4 h-4 stroke-[2.5]" />
+            <span>Add another department</span>
+          </button>
         </div>
       )}
 

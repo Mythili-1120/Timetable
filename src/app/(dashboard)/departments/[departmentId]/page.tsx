@@ -43,6 +43,7 @@ import {
   TeachingAssignment
 } from '../../../../types';
 import { useAuth } from '../../../../lib/context/AuthContext';
+import DepartmentIcon from '../../../../components/DepartmentIcon';
 import {
   Building2,
   Users,
@@ -549,8 +550,12 @@ export default function DepartmentDetailPage() {
         {/* Main Banner Row: Monogram, Title, Badges, and Action Buttons */}
         <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-6 relative z-10">
           <div className="flex items-start gap-4 min-w-0">
-            <div className="w-16 h-16 rounded-2xl bg-gradient-to-br from-[#3B34C4] to-[#251F91] text-white flex items-center justify-center font-extrabold text-base tracking-wider shadow-inner shrink-0">
-              {department.code.slice(0, 4)}
+            <div className="w-16 h-16 rounded-2xl bg-gradient-to-br from-[#3B34C4] to-[#251F91] text-white flex items-center justify-center shadow-inner shrink-0">
+              <DepartmentIcon
+                name={department.name}
+                code={department.code}
+                className="w-8 h-8 text-white stroke-[2]"
+              />
             </div>
 
             <div className="min-w-0">
