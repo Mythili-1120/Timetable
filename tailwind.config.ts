@@ -10,25 +10,25 @@ const config: Config = {
     extend: {
       colors: {
         brand: {
-          50: '#f0f5ff',
-          100: '#e0ecff',
-          200: '#c7dcff',
-          300: '#9ec2ff',
-          400: '#6ea0ff',
-          500: '#3b78ff',
-          600: '#1d55f7',
-          700: '#1741e2',
-          800: '#1936b8',
-          900: '#1a3291',
-          950: '#131e57',
+          50: '#F2F4FD',
+          100: '#E4E7FA',
+          200: '#CCD2F5',
+          300: '#A9B3ED',
+          400: '#7E8CE1',
+          500: '#5362D4',
+          600: '#3431B7',
+          700: '#28229E',
+          800: '#201A83',
+          900: '#171363',
+          950: '#0E0C42',
         },
         ssm: {
-          navy: '#1e3a8a',
-          blue: '#2563eb',
-          slate: '#0f172a',
-          surface: '#f8fafc',
-          border: '#e2e8f0',
-          accent: '#0284c7'
+          navy: '#201A83',
+          blue: '#3431B7',
+          slate: '#0F172A',
+          surface: '#F4F5FB',
+          border: '#E3E5F0',
+          accent: '#4C46D9'
         }
       },
     },
