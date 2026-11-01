@@ -3,10 +3,85 @@ import { db } from '../firebase/config';
 import { ClassTimetableDraft, PublishedTimetable, TimetableSlot } from '../../types';
 import { logAdminAction } from './auditService';
 
+/**
+ * Helper to serialize a 2D timetable grid into Firestore-supported representations.
+ * Cloud Firestore disallows nested arrays directly (i.e. Array of Arrays).
+ * We store:
+ * 1. gridJson: Complete, lossless JSON string representation.
+ * 2. allocations: Flat 1D array of non-null TimetableSlot items for indexed querying.
+ */
+export function serializeTimetableGrid(grid: (TimetableSlot | null)[][]): {
+  gridJson: string;
+  allocations: TimetableSlot[];
+} {
+  const allocations: TimetableSlot[] = [];
+  if (Array.isArray(grid)) {
+    grid.forEach(row => {
+      if (Array.isArray(row)) {
+        row.forEach(slot => {
+          if (slot) allocations.push(slot);
+        });
+      }
+    });
+  }
+  return {
+    gridJson: JSON.stringify(grid || []),
+    allocations
+  };
+}
+
+/**
+ * Helper to deserialize a timetable document from Firestore into a canonical 2D grid.
+ * Reconstructs from gridJson, flat allocations array, or legacy array.
+ */
+export function deserializeTimetableGrid(data: any): (TimetableSlot | null)[][] {
+  if (!data) return [];
+
+  // 1. Lossless JSON string representation
+  if (typeof data.gridJson === 'string' && data.gridJson.trim().length > 0) {
+    try {
+      const parsed = JSON.parse(data.gridJson);
+      if (Array.isArray(parsed)) return parsed;
+    } catch (err) {
+      console.warn('Failed to parse gridJson:', err);
+    }
+  }
+
+  // 2. Legacy nested array (if present in local mocks)
+  if (Array.isArray(data.grid) && Array.isArray(data.grid[0])) {
+    return data.grid;
+  }
+
+  // 3. Reconstruct from flat allocations array
+  if (Array.isArray(data.allocations)) {
+    const maxDay = data.allocations.reduce((max: number, s: any) => Math.max(max, Number(s.dayIdx) || 0), 5);
+    const maxPeriod = data.allocations.reduce((max: number, s: any) => Math.max(max, Number(s.periodIdx) || 0), 7);
+    const grid: (TimetableSlot | null)[][] = Array.from({ length: Math.max(6, maxDay + 1) }, () =>
+      Array(Math.max(8, maxPeriod + 1)).fill(null)
+    );
+
+    data.allocations.forEach((slot: TimetableSlot) => {
+      if (slot && typeof slot.dayIdx === 'number' && typeof slot.periodIdx === 'number') {
+        if (grid[slot.dayIdx]) {
+          grid[slot.dayIdx][slot.periodIdx] = slot;
+        }
+      }
+    });
+    return grid;
+  }
+
+  return [];
+}
+
 export async function saveDraft(draft: ClassTimetableDraft, adminUid: string): Promise<void> {
   const ref = doc(db, 'timetables', draft.classId);
+  const { grid, ...draftWithoutGrid } = draft;
+  const { gridJson, allocations } = serializeTimetableGrid(grid);
+
   await setDoc(ref, {
-    ...draft,
+    ...draftWithoutGrid,
+    gridJson,
+    allocations,
     updatedAt: new Date().toISOString()
   });
   await logAdminAction(adminUid, 'SAVE_DRAFT_TIMETABLE', 'timetables', draft.classId);
@@ -16,7 +91,12 @@ export async function getDraft(classId: string): Promise<ClassTimetableDraft | n
   try {
     const snap = await getDoc(doc(db, 'timetables', classId));
     if (snap.exists()) {
-      return snap.data() as ClassTimetableDraft;
+      const data = snap.data();
+      const grid = deserializeTimetableGrid(data);
+      return {
+        ...data,
+        grid
+      } as ClassTimetableDraft;
     }
     return null;
   } catch (err) {
@@ -93,41 +173,35 @@ export async function publishTimetable(
     }
   });
 
-  // Extract flat allocations list
-  const allocations: TimetableSlot[] = [];
-  data.grid.forEach(day => {
-    day.forEach(slot => {
-      if (slot) allocations.push(slot);
-    });
-  });
-
+  const { gridJson, allocations } = serializeTimetableGrid(data.grid);
   const timetableId = `pub_${data.classId}_v${nextVersion}`;
-  const publishedRecord: PublishedTimetable = {
+  const now = new Date().toISOString();
+
+  // 2. Write immutable published record to Firestore without nested arrays
+  await setDoc(doc(db, 'publishedTimetables', timetableId), {
     timetableId,
     versionNumber: nextVersion,
     classId: data.classId,
     classLabel: data.classLabel,
     departmentId: data.departmentId,
     academicYear: data.academicYear,
-    grid: data.grid,
+    gridJson,
     allocations,
     totalHours: data.totalHours,
-    publishedAt: new Date().toISOString(),
+    publishedAt: now,
     publishedBy: adminUid
-  };
+  });
 
-  // 2. Write immutable published record
-  await setDoc(doc(db, 'publishedTimetables', timetableId), publishedRecord);
-
-  // 3. Update working draft state to PUBLISHED
+  // 3. Update working draft state to PUBLISHED without nested arrays
   await setDoc(doc(db, 'timetables', data.classId), {
     classId: data.classId,
     departmentId: data.departmentId,
     academicYear: data.academicYear,
-    grid: data.grid,
+    gridJson,
+    allocations,
     totalAllocated: data.totalHours,
     status: 'PUBLISHED',
-    updatedAt: new Date().toISOString()
+    updatedAt: now
   });
 
   await logAdminAction(adminUid, 'PUBLISH_TIMETABLE', 'publishedTimetables', timetableId, {
@@ -137,7 +211,21 @@ export async function publishTimetable(
   });
 
   invalidateTimetableCache();
-  return publishedRecord;
+
+  return {
+    timetableId,
+    versionNumber: nextVersion,
+    classId: data.classId,
+    classLabel: data.classLabel,
+    departmentId: data.departmentId,
+    academicYear: data.academicYear,
+    grid: data.grid,
+    gridJson,
+    allocations,
+    totalHours: data.totalHours,
+    publishedAt: now,
+    publishedBy: adminUid
+  };
 }
 
 // In-memory cache for fast responsive navigation
@@ -193,7 +281,14 @@ export async function getPublishedTimetables(academicYear?: string, forceRefresh
       q = query(collection(db, 'publishedTimetables'), where('academicYear', '==', academicYear));
     }
     const snap = await getDocs(q);
-    const result = snap.docs.map(d => d.data() as PublishedTimetable);
+    const result = snap.docs.map(d => {
+      const data = d.data();
+      const grid = deserializeTimetableGrid(data);
+      return {
+        ...data,
+        grid
+      } as PublishedTimetable;
+    });
     if (!academicYear) {
       cachedPublished = result;
       publishedCacheTime = Date.now();

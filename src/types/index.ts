@@ -109,7 +109,6 @@ export interface ClassSection {
   academicYear: string;
   yearOfStudy: '1st Year' | '2nd Year' | '3rd Year' | '4th Year';
   section: string;
-  strength?: number;
   status: 'ACTIVE' | 'INACTIVE';
   createdAt: string;
   updatedAt: string;
@@ -130,6 +129,50 @@ export interface TeachingAssignment {
   updatedAt: string;
   previousMemberId?: string; // Tracks previous faculty Member ID upon reassignment
   reassignedAt?: string; // Timestamp of latest staff reassignment
+}
+
+export type AssignmentValidationErrorCode =
+  | 'SECTION_NOT_SELECTED'
+  | 'SECTION_NOT_FOUND'
+  | 'SECTION_DEPARTMENT_MISMATCH'
+  | 'SECTION_ACADEMIC_YEAR_MISMATCH'
+  | 'SUBJECT_ASSIGNMENT_MISSING'
+  | 'STAFF_INACTIVE'
+  | 'STAFF_SUBJECT_INELIGIBLE'
+  | 'ASSIGNMENT_DATA_LOAD_FAILED'
+  | 'ASSIGNMENT_DATA_AMBIGUOUS'
+  | 'NO_CURRICULUM_SUBJECTS'
+  | 'MISSING_ASSIGNMENT' // backward compatibility alias
+  | 'INACTIVE_STAFF' // backward compatibility alias
+  | 'INELIGIBLE_STAFF' // backward compatibility alias
+  | 'SCOPE_MISMATCH' // backward compatibility alias
+  | 'CLASS_NOT_FOUND'; // backward compatibility alias
+
+export interface StructuredValidationError {
+  errorCode: AssignmentValidationErrorCode;
+  subjectId?: string;
+  subjectName?: string;
+  departmentId: string;
+  classId: string;
+  memberId?: string;
+  staffName?: string;
+  message: string;
+  recommendedAction: string;
+}
+
+export interface SubjectStaffValidationResult {
+  isValid: boolean;
+  canGenerate: boolean;
+  totalRequiredHours: number;
+  curriculumSubjects: Subject[];
+  assignedSubjects: {
+    subject: Subject;
+    assignment: TeachingAssignment;
+    staff: Staff;
+  }[];
+  missingStaffSubjects: Subject[];
+  blockingErrors: string[];
+  structuredErrors: StructuredValidationError[];
 }
 
 export interface ReassignStaffInput {
@@ -156,9 +199,17 @@ export interface ClassTimetableDraft {
   departmentId: string;
   academicYear: string;
   grid: (TimetableSlot | null)[][];
+  gridJson?: string;
+  allocations?: TimetableSlot[];
   totalAllocated: number;
   status: 'DRAFT' | 'GENERATED' | 'PUBLISHED';
   updatedAt: string;
+  generationMetadata?: {
+    variantIndex?: number;
+    totalCandidates?: number;
+    qualityScore?: number;
+    generatedAt?: string;
+  };
 }
 
 export interface PublishedTimetable {
@@ -169,6 +220,7 @@ export interface PublishedTimetable {
   departmentId: string;
   academicYear: string;
   grid: (TimetableSlot | null)[][];
+  gridJson?: string;
   allocations: TimetableSlot[];
   totalHours: number;
   publishedAt: string;

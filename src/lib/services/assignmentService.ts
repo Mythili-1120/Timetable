@@ -1,9 +1,19 @@
 import { collection, doc, getDocs, getDoc, setDoc, updateDoc, deleteDoc, query, where } from 'firebase/firestore';
 import { db } from '../firebase/config';
-import { TeachingAssignment, ClassSection, Staff, Subject, StaffDepartmentLink, SubjectResolutionResult } from '../../types';
+import {
+  TeachingAssignment,
+  ClassSection,
+  Staff,
+  Subject,
+  StaffDepartmentLink,
+  SubjectResolutionResult,
+  StructuredValidationError,
+  SubjectStaffValidationResult,
+  AssignmentValidationErrorCode
+} from '../../types';
 import { logAdminAction } from './auditService';
 import { getAllStaffDepartmentLinks, getStaffById, linkStaffToDepartment, invalidateStaffCache, getAllStaff } from './staffService';
-import { getAllSubjects } from './subjectService';
+import { getAllSubjects, normalizeDeptId } from './subjectService';
 import { getAllClasses } from './classService';
 
 export interface AssignmentValidationResult {
@@ -61,31 +71,87 @@ export function validateAssignmentInput(data: {
   return { isValid: true };
 }
 
-// In-memory cache for fast responsive navigation
-let cachedAssignments: TeachingAssignment[] | null = null;
-let assignmentCacheTime = 0;
-const CACHE_TTL_MS = 60000; // 60 seconds (revalidated on mutation or expiration)
+// ============================================================================
+// CANONICAL SCOPED CACHE & IN-FLIGHT DEDUPLICATION
+// ============================================================================
 
-export function invalidateAssignmentCache() {
-  cachedAssignments = null;
-  assignmentCacheTime = 0;
+interface ScopedAssignmentCacheEntry {
+  data: TeachingAssignment[];
+  timestamp: number;
 }
 
+const scopedAssignmentCache = new Map<string, ScopedAssignmentCacheEntry>();
+const inFlightAssignmentPromises = new Map<string, Promise<TeachingAssignment[]>>();
+const CACHE_TTL_MS = 60000; // 60 seconds
+
+function getAssignmentCacheKey(filters?: {
+  departmentId?: string;
+  classId?: string;
+  memberId?: string;
+  semester?: string;
+  academicYear?: string;
+}): string {
+  if (!filters || Object.keys(filters).length === 0) return '__GLOBAL__';
+  const parts: string[] = [];
+  if (filters.classId) parts.push(`class:${filters.classId.trim()}`);
+  if (filters.departmentId) parts.push(`dept:${normalizeDeptId(filters.departmentId)}`);
+  if (filters.memberId) parts.push(`member:${filters.memberId.trim()}`);
+  if (filters.semester && filters.semester !== 'ALL') parts.push(`sem:${filters.semester.trim()}`);
+  if (filters.academicYear) parts.push(`acad:${filters.academicYear.trim()}`);
+  return parts.length > 0 ? parts.sort().join('|') : '__GLOBAL__';
+}
+
+/**
+ * Centrally invalidates the teaching assignment cache.
+ * When classId or departmentId is passed, invalidates matching scopes and global cache.
+ * When called without arguments, invalidates all scopes across the application.
+ */
+export function invalidateAssignmentCache(classId?: string, departmentId?: string) {
+  scopedAssignmentCache.delete('__GLOBAL__');
+  if (!classId && !departmentId) {
+    scopedAssignmentCache.clear();
+    return;
+  }
+  const cleanClass = classId?.trim();
+  const normDept = departmentId ? normalizeDeptId(departmentId) : '';
+  for (const key of Array.from(scopedAssignmentCache.keys())) {
+    if (cleanClass && key.includes(`class:${cleanClass}`)) {
+      scopedAssignmentCache.delete(key);
+    } else if (normDept && key.includes(`dept:${normDept}`)) {
+      scopedAssignmentCache.delete(key);
+    }
+  }
+}
+
+/**
+ * Resolves teaching assignments from the scoped in-memory cache if fresh.
+ */
 export function getCachedAssignments(
   filters?: { departmentId?: string; classId?: string; memberId?: string; semester?: string; academicYear?: string }
 ): TeachingAssignment[] | null {
-  if (cachedAssignments && (Date.now() - assignmentCacheTime < CACHE_TTL_MS)) {
-    let list = cachedAssignments;
+  const key = getAssignmentCacheKey(filters);
+  const entry = scopedAssignmentCache.get(key);
+  if (entry && (Date.now() - entry.timestamp < CACHE_TTL_MS)) {
+    return entry.data;
+  }
+
+  // If a global cache snapshot exists, filter from it safely
+  const globalEntry = scopedAssignmentCache.get('__GLOBAL__');
+  if (globalEntry && (Date.now() - globalEntry.timestamp < CACHE_TTL_MS)) {
+    let list = globalEntry.data;
     if (filters?.departmentId) {
-      list = list.filter(a => a.departmentId === filters.departmentId);
+      const targetNorm = normalizeDeptId(filters.departmentId);
+      list = list.filter(a => normalizeDeptId(a.departmentId) === targetNorm);
     }
     if (filters?.classId) {
-      list = list.filter(a => a.classId === filters.classId);
+      const targetClass = filters.classId.trim();
+      list = list.filter(a => a.classId === targetClass);
     }
     if (filters?.memberId) {
-      list = list.filter(a => a.memberId === filters.memberId);
+      const targetMember = filters.memberId.trim();
+      list = list.filter(a => a.memberId === targetMember);
     }
-    if (filters?.semester) {
+    if (filters?.semester && filters.semester !== 'ALL') {
       list = list.filter(a => a.semester === filters.semester);
     }
     if (filters?.academicYear) {
@@ -93,56 +159,75 @@ export function getCachedAssignments(
     }
     return list;
   }
+
   return null;
 }
 
+/**
+ * Canonical Teaching Assignment Fetcher:
+ * - Reads from scoped cache when fresh.
+ * - Deduplicates in-flight simultaneous requests for the identical scope.
+ * - Dispatches correctly scoped, indexed Firestore queries (classId, departmentId, memberId).
+ * - Avoids full collection scans when scoped queries are available.
+ * - Supports forceRefresh to bypass cache and guarantee fresh database truth.
+ */
 export async function getAssignments(
   filters?: { departmentId?: string; classId?: string; memberId?: string; semester?: string; academicYear?: string },
   forceRefresh = false
 ): Promise<TeachingAssignment[]> {
-  if (!forceRefresh && cachedAssignments && (Date.now() - assignmentCacheTime < CACHE_TTL_MS)) {
-    return getCachedAssignments(filters) || [];
+  const cacheKey = getAssignmentCacheKey(filters);
+
+  if (!forceRefresh) {
+    const cached = getCachedAssignments(filters);
+    if (cached) return cached;
+
+    // Deduplicate in-flight concurrent requests for the exact same scope
+    const existingPromise = inFlightAssignmentPromises.get(cacheKey);
+    if (existingPromise) return await existingPromise;
   }
 
-  try {
-    let q = query(collection(db, 'teachingAssignments'));
-    if (!filters && (!cachedAssignments || forceRefresh)) {
-      // fetch all into cache
+  const queryPromise = (async () => {
+    try {
+      let q = query(collection(db, 'teachingAssignments'));
+
+      // Scoped Firestore queries
+      if (filters?.classId) {
+        q = query(collection(db, 'teachingAssignments'), where('classId', '==', filters.classId.trim()));
+      } else if (filters?.departmentId) {
+        q = query(collection(db, 'teachingAssignments'), where('departmentId', '==', filters.departmentId.trim()));
+      } else if (filters?.memberId) {
+        q = query(collection(db, 'teachingAssignments'), where('memberId', '==', filters.memberId.trim()));
+      }
+
       const snap = await getDocs(q);
-      const all = snap.docs.map(d => d.data() as TeachingAssignment);
-      cachedAssignments = all;
-      assignmentCacheTime = Date.now();
-      return all;
-    }
+      let list = snap.docs.map(d => d.data() as TeachingAssignment);
 
-    if (filters?.classId && (!cachedAssignments || forceRefresh)) {
-      q = query(collection(db, 'teachingAssignments'), where('classId', '==', filters.classId));
-    } else if (filters?.departmentId && (!cachedAssignments || forceRefresh)) {
-      q = query(collection(db, 'teachingAssignments'), where('departmentId', '==', filters.departmentId));
-    } else if (filters?.memberId && (!cachedAssignments || forceRefresh)) {
-      q = query(collection(db, 'teachingAssignments'), where('memberId', '==', filters.memberId));
-    }
+      // Apply secondary filters
+      if (filters?.departmentId && filters?.classId) {
+        const targetNorm = normalizeDeptId(filters.departmentId);
+        list = list.filter(a => normalizeDeptId(a.departmentId) === targetNorm);
+      }
+      if (filters?.semester && filters.semester !== 'ALL') {
+        list = list.filter(a => a.semester === filters.semester);
+      }
+      if (filters?.academicYear) {
+        list = list.filter(a => a.academicYear === filters.academicYear);
+      }
 
-    const snap = await getDocs(q);
-    let list = snap.docs.map(d => d.data() as TeachingAssignment);
-
-    if (!filters?.classId && !filters?.departmentId && !filters?.memberId) {
-      cachedAssignments = list;
-      assignmentCacheTime = Date.now();
+      // Store in scoped cache
+      scopedAssignmentCache.set(cacheKey, { data: list, timestamp: Date.now() });
+      return list;
+    } catch (err) {
+      console.error('Error fetching teaching assignments:', err);
+      const fallback = getCachedAssignments(filters);
+      return fallback || [];
+    } finally {
+      inFlightAssignmentPromises.delete(cacheKey);
     }
+  })();
 
-    if (filters?.semester) {
-      list = list.filter(a => a.semester === filters.semester);
-    }
-    if (filters?.academicYear) {
-      list = list.filter(a => a.academicYear === filters.academicYear);
-    }
-
-    return list;
-  } catch (err) {
-    console.error('Error fetching teaching assignments:', err);
-    return cachedAssignments ? getCachedAssignments(filters) || [] : [];
-  }
+  inFlightAssignmentPromises.set(cacheKey, queryPromise);
+  return await queryPromise;
 }
 
 /**
@@ -170,6 +255,9 @@ export async function validateStaffSubjectEligibility(
     return { isEligible: false, error: 'Subject ID is required.' };
   }
 
+  const normDept = normalizeDeptId(departmentId);
+  const cleanSubjId = subjectId.trim();
+
   const [staff, allLinks, allSubjects] = await Promise.all([
     getStaffById(memberId),
     getAllStaffDepartmentLinks(),
@@ -184,9 +272,9 @@ export async function validateStaffSubjectEligibility(
   }
 
   // 1. Verify Department affiliation (primary department OR active staffDepartmentLink)
-  const isPrimaryDept = staff.primaryDepartmentId === departmentId;
+  const isPrimaryDept = normalizeDeptId(staff.primaryDepartmentId) === normDept;
   const activeLink = allLinks.find(
-    l => l.memberId === memberId && l.departmentId === departmentId && l.status === 'ACTIVE'
+    l => l.memberId === memberId && normalizeDeptId(l.departmentId) === normDept && l.status === 'ACTIVE'
   );
 
   if (!isPrimaryDept && !activeLink) {
@@ -197,7 +285,9 @@ export async function validateStaffSubjectEligibility(
   }
 
   // 2. Verify Subject belongs to department
-  const subjectExists = allSubjects.some(s => s.subjectId === subjectId);
+  const subjectExists = allSubjects.some(
+    s => s.subjectId === cleanSubjId || s.subjectId.trim() === cleanSubjId
+  );
   if (!subjectExists) {
     return {
       isEligible: false,
@@ -208,13 +298,19 @@ export async function validateStaffSubjectEligibility(
   // 3. Verify Subject Eligibility
   const eligibleSubjectIds = new Set<string>();
   if (Array.isArray(staff.subjectIds)) {
-    staff.subjectIds.forEach(id => eligibleSubjectIds.add(id));
+    staff.subjectIds.forEach(id => {
+      eligibleSubjectIds.add(id);
+      eligibleSubjectIds.add(id.trim());
+    });
   }
   if (activeLink && Array.isArray(activeLink.subjectIds)) {
-    activeLink.subjectIds.forEach(id => eligibleSubjectIds.add(id));
+    activeLink.subjectIds.forEach(id => {
+      eligibleSubjectIds.add(id);
+      eligibleSubjectIds.add(id.trim());
+    });
   }
 
-  if (!eligibleSubjectIds.has(subjectId)) {
+  if (!eligibleSubjectIds.has(cleanSubjId)) {
     return {
       isEligible: false,
       error: 'This Staff member is not configured as eligible for the selected Subject. Update Staff Subject details before assigning.'
@@ -249,17 +345,17 @@ export async function createAssignment(
     throw new Error(eligibility.error);
   }
 
-  const assignmentId = data.assignmentId || (
-    data.semester
-      ? generateAssignmentSlotId(data.classId, data.subjectId, data.semester)
-      : `asgn_${data.classId}_${data.subjectId}_${data.memberId}`
-  );
+  // Deterministic unique slot ID: asgn_{classId}_{cleanSemester}_{cleanSubjectId}
+  // Enforces 1 active assignment per subject per class section
+  const cleanSem = data.semester ? data.semester.replace(/\s+/g, '-').toLowerCase() : 'sem1';
+  const cleanSubj = data.subjectId.trim();
+  const assignmentId = data.assignmentId || generateAssignmentSlotId(data.classId, cleanSubj, cleanSem);
 
   const record: TeachingAssignment = {
     assignmentId,
-    memberId: data.memberId,
+    memberId: data.memberId.trim(),
     departmentId: data.departmentId,
-    subjectId: data.subjectId,
+    subjectId: cleanSubj,
     classId: data.classId,
     weeklyHours: Number(data.weeklyHours),
     type: data.type,
@@ -271,14 +367,17 @@ export async function createAssignment(
   };
 
   await setDoc(doc(db, 'teachingAssignments', assignmentId), record);
-  invalidateAssignmentCache();
+  invalidateAssignmentCache(data.classId, data.departmentId);
   await logAdminAction(adminUid, 'CREATE_ASSIGNMENT', 'teachingAssignments', assignmentId, record);
   return record;
 }
 
 export async function deleteAssignment(assignmentId: string, adminUid: string): Promise<void> {
-  await deleteDoc(doc(db, 'teachingAssignments', assignmentId));
-  invalidateAssignmentCache();
+  const asgnRef = doc(db, 'teachingAssignments', assignmentId);
+  const snap = await getDoc(asgnRef);
+  const existing = snap.exists() ? snap.data() as TeachingAssignment : null;
+  await deleteDoc(asgnRef);
+  invalidateAssignmentCache(existing?.classId, existing?.departmentId);
   await logAdminAction(adminUid, 'DELETE_ASSIGNMENT', 'teachingAssignments', assignmentId);
 }
 
@@ -361,6 +460,61 @@ export async function unmapStaffFromSubject(
       subjectId
     });
   }
+}
+
+/**
+ * Copies teaching assignments from one class section to another.
+ * Extremely helpful for multi-section departments (e.g. copying from Section A to Section B).
+ */
+export async function copyAssignmentsBetweenClasses(
+  sourceClassId: string,
+  targetClassId: string,
+  adminUid: string
+): Promise<{ copied: number; skipped: number }> {
+  if (sourceClassId === targetClassId) return { copied: 0, skipped: 0 };
+
+  const [sourceAsgns, targetAsgns, targetClasses] = await Promise.all([
+    getAssignments({ classId: sourceClassId }, true),
+    getAssignments({ classId: targetClassId }, true),
+    getAllClasses()
+  ]);
+
+  const targetClass = targetClasses.find(c => c.classId === targetClassId);
+  if (!targetClass) throw new Error(`Target class section ${targetClassId} not found.`);
+
+  const existingSubjectIds = new Set(targetAsgns.map(a => a.subjectId.trim()));
+  let copied = 0;
+  let skipped = 0;
+
+  for (const asgn of sourceAsgns) {
+    if (asgn.status !== 'ACTIVE') continue;
+    if (existingSubjectIds.has(asgn.subjectId.trim())) {
+      skipped++;
+      continue;
+    }
+
+    // Ensure staff member is linked to target class department if needed
+    await mapStaffToSubject(asgn.memberId, targetClass.departmentId, asgn.subjectId, adminUid);
+
+    await createAssignment(
+      {
+        memberId: asgn.memberId,
+        departmentId: targetClass.departmentId,
+        subjectId: asgn.subjectId,
+        classId: targetClassId,
+        weeklyHours: asgn.weeklyHours,
+        type: asgn.type || 'Theory',
+        academicYear: targetClass.academicYear || asgn.academicYear || '2025–2026',
+        semester: asgn.semester || 'Semester 1'
+      },
+      adminUid
+    );
+    existingSubjectIds.add(asgn.subjectId.trim());
+    copied++;
+  }
+
+  invalidateAssignmentCache(targetClassId, targetClass.departmentId);
+  return { copied, skipped };
 }
 
 /**
@@ -656,7 +810,7 @@ export async function reassignStaff(
     reassignedAt: now,
     updatedAt: now
   });
-  invalidateAssignmentCache();
+  invalidateAssignmentCache(existing.classId, existing.departmentId);
 
   await logAdminAction(adminUid, 'REASSIGN_STAFF', 'teachingAssignments', assignmentId, {
     previousMemberId: oldMemberId,
@@ -715,19 +869,20 @@ export interface SubjectStaffValidationResult {
  */
 export async function validateSubjectStaffForClass(
   classInput: string | ClassSection,
-  semester?: string
+  semester?: string,
+  forceRefresh = false,
+  expectedDepartmentId?: string,
+  expectedYearOfStudy?: string
 ): Promise<SubjectStaffValidationResult> {
-  const [allClasses, allSubjects, allStaff] = await Promise.all([
-    getAllClasses(),
-    getAllSubjects(),
-    getAllStaff()
-  ]);
-
-  const classSection = typeof classInput === 'string'
-    ? allClasses.find((c: ClassSection) => c.classId === classInput)
-    : classInput;
-
-  if (!classSection) {
+  // A. SECTION_NOT_SELECTED: Validate presence of selected class section
+  if (!classInput || (typeof classInput === 'string' && !classInput.trim())) {
+    const err: StructuredValidationError = {
+      errorCode: 'SECTION_NOT_SELECTED',
+      departmentId: expectedDepartmentId || '',
+      classId: '',
+      message: 'No class section has been selected. Please choose an Academic Year and Section.',
+      recommendedAction: 'Select a valid Section from the Section dropdown selector above.'
+    };
     return {
       isValid: false,
       canGenerate: false,
@@ -735,14 +890,92 @@ export async function validateSubjectStaffForClass(
       curriculumSubjects: [],
       assignedSubjects: [],
       missingStaffSubjects: [],
-      blockingErrors: ['Selected class section was not found in the database.']
+      blockingErrors: [err.message],
+      structuredErrors: [err]
     };
   }
+
+  const [allClasses, allSubjects, allStaff, allDeptLinks] = await Promise.all([
+    getAllClasses(undefined, undefined, forceRefresh),
+    getAllSubjects(undefined, forceRefresh),
+    getAllStaff(forceRefresh),
+    getAllStaffDepartmentLinks(forceRefresh)
+  ]);
+
+  const cleanClassId = typeof classInput === 'string' ? classInput.trim() : classInput.classId?.trim() || '';
+  const classSection = typeof classInput === 'string'
+    ? allClasses.find((c: ClassSection) => c.classId === cleanClassId)
+    : classInput;
+
+  // B. SECTION_NOT_FOUND: Class does not exist in canonical collection
+  if (!classSection) {
+    const err: StructuredValidationError = {
+      errorCode: 'SECTION_NOT_FOUND',
+      departmentId: expectedDepartmentId || '',
+      classId: cleanClassId,
+      message: `Selected class section "${cleanClassId}" was not found in institutional records.`,
+      recommendedAction: 'Verify that the class section exists in Department Academic Years.'
+    };
+    return {
+      isValid: false,
+      canGenerate: false,
+      totalRequiredHours: 0,
+      curriculumSubjects: [],
+      assignedSubjects: [],
+      missingStaffSubjects: [],
+      blockingErrors: [err.message],
+      structuredErrors: [err]
+    };
+  }
+
+  // C. SECTION_DEPARTMENT_MISMATCH: Selected section belongs to a different department
+  if (expectedDepartmentId && normalizeDeptId(classSection.departmentId) !== normalizeDeptId(expectedDepartmentId)) {
+    const err: StructuredValidationError = {
+      errorCode: 'SECTION_DEPARTMENT_MISMATCH',
+      departmentId: classSection.departmentId,
+      classId: classSection.classId,
+      message: `Selected section "${classSection.classId}" belongs to department "${classSection.departmentId}", not "${expectedDepartmentId}".`,
+      recommendedAction: 'Select a section that belongs to the currently active department.'
+    };
+    return {
+      isValid: false,
+      canGenerate: false,
+      totalRequiredHours: 0,
+      curriculumSubjects: [],
+      assignedSubjects: [],
+      missingStaffSubjects: [],
+      blockingErrors: [err.message],
+      structuredErrors: [err]
+    };
+  }
+
+  // D. SECTION_ACADEMIC_YEAR_MISMATCH: Selected section belongs to a different year of study
+  if (expectedYearOfStudy && classSection.yearOfStudy !== expectedYearOfStudy) {
+    const err: StructuredValidationError = {
+      errorCode: 'SECTION_ACADEMIC_YEAR_MISMATCH',
+      departmentId: classSection.departmentId,
+      classId: classSection.classId,
+      message: `Selected section "${classSection.classId}" is in ${classSection.yearOfStudy}, not the active cohort ${expectedYearOfStudy}.`,
+      recommendedAction: 'Select a section corresponding to the active Academic Year Cohort.'
+    };
+    return {
+      isValid: false,
+      canGenerate: false,
+      totalRequiredHours: 0,
+      curriculumSubjects: [],
+      assignedSubjects: [],
+      missingStaffSubjects: [],
+      blockingErrors: [err.message],
+      structuredErrors: [err]
+    };
+  }
+
+  const targetNormDept = normalizeDeptId(classSection.departmentId);
 
   // 1. Get curriculum subjects for this class section
   const deptSubjects = allSubjects.filter((s: Subject) => {
     if (s.status !== 'ACTIVE') return false;
-    if (s.departmentId !== classSection.departmentId) return false;
+    if (normalizeDeptId(s.departmentId) !== targetNormDept) return false;
     if (s.yearOfStudy && classSection.yearOfStudy && s.yearOfStudy !== classSection.yearOfStudy) {
       return false;
     }
@@ -758,6 +991,13 @@ export async function validateSubjectStaffForClass(
   });
 
   if (scopedSubjects.length === 0) {
+    const err: StructuredValidationError = {
+      errorCode: 'NO_CURRICULUM_SUBJECTS',
+      departmentId: classSection.departmentId,
+      classId: classSection.classId,
+      message: `No active curriculum subjects found for ${classSection.yearOfStudy} — Section ${classSection.section}.`,
+      recommendedAction: 'Add subjects in Department / Subject Master before attempting timetable generation.'
+    };
     return {
       isValid: false,
       canGenerate: false,
@@ -765,18 +1005,76 @@ export async function validateSubjectStaffForClass(
       curriculumSubjects: [],
       assignedSubjects: [],
       missingStaffSubjects: [],
-      blockingErrors: [
-        `No active curriculum subjects found for ${classSection.yearOfStudy} - Section ${classSection.section}. Please add subjects in Department / Subject Master first.`
-      ]
+      blockingErrors: [err.message],
+      structuredErrors: [err]
     };
   }
 
-  // 2. Get teaching assignments for this class
-  let assignments = await getAssignments({ classId: classSection.classId });
-  if (semester && semester !== 'ALL') {
-    const semAsgns = assignments.filter(a => a.semester === semester);
-    if (semAsgns.length > 0) {
-      assignments = semAsgns;
+  // 2. Get teaching assignments for this class (H. ASSIGNMENT_DATA_LOAD_FAILED protection)
+  let assignments: TeachingAssignment[] = [];
+  try {
+    assignments = await getAssignments({ classId: classSection.classId }, forceRefresh);
+    if (semester && semester !== 'ALL') {
+      const semAsgns = assignments.filter(a => a.semester === semester);
+      if (semAsgns.length > 0) {
+        assignments = semAsgns;
+      }
+    }
+  } catch (loadErr: any) {
+    console.error('Failed to load teaching assignments for section:', loadErr);
+    const err: StructuredValidationError = {
+      errorCode: 'ASSIGNMENT_DATA_LOAD_FAILED',
+      departmentId: classSection.departmentId,
+      classId: classSection.classId,
+      message: `Failed to load teaching assignments for Section ${classSection.section} from Firestore: ${loadErr?.message || 'Read error'}.`,
+      recommendedAction: 'Check network connectivity and Firestore security permissions. Do not assume assignments are missing.'
+    };
+    return {
+      isValid: false,
+      canGenerate: false,
+      totalRequiredHours: 0,
+      curriculumSubjects: scopedSubjects,
+      assignedSubjects: [],
+      missingStaffSubjects: [],
+      blockingErrors: [err.message],
+      structuredErrors: [err]
+    };
+  }
+
+  // I. ASSIGNMENT_DATA_AMBIGUOUS: Detect multiple conflicting faculty records for the same subject
+  const asgnsBySubject = new Map<string, TeachingAssignment[]>();
+  assignments.forEach(a => {
+    if (a.status === 'ACTIVE' && a.subjectId) {
+      const cleanKey = a.subjectId.trim();
+      const existing = asgnsBySubject.get(cleanKey) || [];
+      existing.push(a);
+      asgnsBySubject.set(cleanKey, existing);
+    }
+  });
+
+  for (const [subjKey, asgnList] of asgnsBySubject.entries()) {
+    const distinctFaculty = Array.from(new Set(asgnList.map(a => a.memberId?.trim()).filter(Boolean)));
+    if (distinctFaculty.length > 1) {
+      const matchedSubj = scopedSubjects.find(s => s.subjectId.trim() === subjKey);
+      const err: StructuredValidationError = {
+        errorCode: 'ASSIGNMENT_DATA_AMBIGUOUS',
+        subjectId: subjKey,
+        subjectName: matchedSubj?.name || subjKey,
+        departmentId: classSection.departmentId,
+        classId: classSection.classId,
+        message: `Ambiguous teaching assignments: Subject "${matchedSubj?.name || subjKey}" has conflicting active assignments to faculty [${distinctFaculty.join(', ')}].`,
+        recommendedAction: 'Clean up duplicate assignments in Department Teaching Assignments.'
+      };
+      return {
+        isValid: false,
+        canGenerate: false,
+        totalRequiredHours: 0,
+        curriculumSubjects: scopedSubjects,
+        assignedSubjects: [],
+        missingStaffSubjects: matchedSubj ? [matchedSubj] : [],
+        blockingErrors: [err.message],
+        structuredErrors: [err]
+      };
     }
   }
 
@@ -785,63 +1083,94 @@ export async function validateSubjectStaffForClass(
 
   const asgnMap = new Map<string, TeachingAssignment>();
   assignments.forEach(a => {
-    if (a.status === 'ACTIVE') {
-      asgnMap.set(a.subjectId, a);
+    if (a.status === 'ACTIVE' && a.subjectId) {
+      const keys = [a.subjectId, a.subjectId.trim(), a.subjectId.trim().toUpperCase()];
+      keys.forEach(k => {
+        const existing = asgnMap.get(k);
+        if (!existing || (a.updatedAt && existing.updatedAt && a.updatedAt > existing.updatedAt)) {
+          asgnMap.set(k, a);
+        }
+      });
     }
   });
 
   const assignedSubjects: { subject: Subject; assignment: TeachingAssignment; staff: Staff }[] = [];
   const missingStaffSubjects: Subject[] = [];
-  const blockingErrors: string[] = [];
+  const structuredErrors: StructuredValidationError[] = [];
   let totalRequiredHours = 0;
 
-  const allDeptLinks = await getAllStaffDepartmentLinks();
   const linkSubjMap = new Map<string, string[]>();
   allDeptLinks.forEach(l => {
     if (l.status === 'ACTIVE') {
-      const key = `${l.memberId}_${l.departmentId}`;
+      const key = `${l.memberId}_${normalizeDeptId(l.departmentId)}`;
       linkSubjMap.set(key, l.subjectIds || []);
     }
   });
 
   for (const subj of scopedSubjects) {
     totalRequiredHours += Number(subj.weeklyHours) || (subj.type === 'Lab' ? 4 : 3);
-    const asgn = asgnMap.get(subj.subjectId);
+    const cleanSubjId = subj.subjectId.trim();
+    const asgn = asgnMap.get(subj.subjectId) || asgnMap.get(cleanSubjId) || asgnMap.get(cleanSubjId.toUpperCase());
 
+    // E. SUBJECT_ASSIGNMENT_MISSING: Genuine missing assignment for this exact section
     if (!asgn || !asgn.memberId?.trim()) {
       missingStaffSubjects.push(subj);
-      blockingErrors.push(
-        `Staff assignment is missing for ${subj.name}. Please assign an eligible Staff member before generating the timetable.`
-      );
+      structuredErrors.push({
+        errorCode: 'SUBJECT_ASSIGNMENT_MISSING',
+        subjectId: subj.subjectId,
+        subjectName: subj.name,
+        departmentId: classSection.departmentId,
+        classId: classSection.classId,
+        message: `Staff assignment is missing for ${subj.name} (${subj.code}) in ${classSection.yearOfStudy} — Section ${classSection.section}.`,
+        recommendedAction: 'Assign an active, qualified faculty member in Department Teaching Assignments.'
+      });
       continue;
     }
 
-    const staff = staffMap.get(asgn.memberId);
+    const staff = staffMap.get(asgn.memberId.trim());
+    // F. STAFF_INACTIVE: Assigned staff member is marked inactive or deleted
     if (!staff || staff.status === 'INACTIVE') {
       missingStaffSubjects.push(subj);
-      blockingErrors.push(
-        `Assigned Staff member [${asgn.memberId}] for ${subj.name} is inactive or not found in the staff directory.`
-      );
+      structuredErrors.push({
+        errorCode: 'STAFF_INACTIVE',
+        subjectId: subj.subjectId,
+        subjectName: subj.name,
+        departmentId: classSection.departmentId,
+        classId: classSection.classId,
+        memberId: asgn.memberId,
+        staffName: staff?.displayName || asgn.memberId,
+        message: `Assigned faculty [${asgn.memberId} - ${staff?.displayName || 'Faculty'}] for ${subj.name} is inactive.`,
+        recommendedAction: 'Reactivate this faculty member in the Staff tab or reassign the course to an active faculty member.'
+      });
       continue;
     }
 
-    // Verify canonical Subject eligibility: staff.subjectIds or link.subjectIds
-    const staffEligibleSubjs = Array.isArray(staff.subjectIds) ? staff.subjectIds : [];
-    const linkEligibleSubjs = linkSubjMap.get(`${staff.memberId}_${classSection.departmentId}`) || [];
-    const isEligible = staffEligibleSubjs.includes(subj.subjectId) || linkEligibleSubjs.includes(subj.subjectId);
+    // G. STAFF_SUBJECT_INELIGIBLE: Staff member lacks subject qualification
+    const staffEligibleSubjs = Array.isArray(staff.subjectIds) ? staff.subjectIds.map(id => id.trim()) : [];
+    const linkEligibleSubjs = (linkSubjMap.get(`${staff.memberId}_${targetNormDept}`) || []).map(id => id.trim());
+    const isEligible = staffEligibleSubjs.includes(cleanSubjId) || linkEligibleSubjs.includes(cleanSubjId);
 
     if (!isEligible) {
       missingStaffSubjects.push(subj);
-      blockingErrors.push(
-        `Staff assignment is missing for ${subj.name}. Assigned faculty ${staff.displayName || staff.memberId} is not eligible for this subject.`
-      );
+      structuredErrors.push({
+        errorCode: 'STAFF_SUBJECT_INELIGIBLE',
+        subjectId: subj.subjectId,
+        subjectName: subj.name,
+        departmentId: classSection.departmentId,
+        classId: classSection.classId,
+        memberId: staff.memberId,
+        staffName: staff.displayName || staff.memberId,
+        message: `Assigned faculty ${staff.displayName || staff.memberId} is not configured as qualified for ${subj.name} (${subj.code}).`,
+        recommendedAction: 'Edit this faculty member in the Staff tab and check this course under Qualified Subjects.'
+      });
       continue;
     }
 
     assignedSubjects.push({ subject: subj, assignment: asgn, staff });
   }
 
-  const isValid = missingStaffSubjects.length === 0 && blockingErrors.length === 0;
+  const blockingErrors = structuredErrors.map(e => e.message);
+  const isValid = missingStaffSubjects.length === 0 && structuredErrors.length === 0;
 
   return {
     isValid,
@@ -850,6 +1179,7 @@ export async function validateSubjectStaffForClass(
     curriculumSubjects: scopedSubjects,
     assignedSubjects,
     missingStaffSubjects,
-    blockingErrors
+    blockingErrors,
+    structuredErrors
   };
 }

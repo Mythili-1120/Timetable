@@ -20,7 +20,6 @@ export default function ClassesPage() {
   const [academicYear, setAcademicYear] = useState('2025–2026');
   const [yearOfStudy, setYearOfStudy] = useState<'1st Year' | '2nd Year' | '3rd Year' | '4th Year'>('1st Year');
   const [section, setSection] = useState('A');
-  const [strength, setStrength] = useState(60);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -63,16 +62,13 @@ export default function ClassesPage() {
     setError(null);
     try {
       if (editingClass) {
-        await updateClass(editingClass.classId, {
-          strength: Number(strength)
-        }, user.uid);
+        await updateClass(editingClass.classId, {}, user.uid);
       } else {
         await createClass({
           departmentId,
           academicYear,
           yearOfStudy,
-          section: section.trim().toUpperCase(),
-          strength: Number(strength)
+          section: section.trim().toUpperCase()
         }, user.uid);
       }
 
@@ -150,7 +146,6 @@ export default function ClassesPage() {
                 <th className="py-3.5 px-4">Academic Year</th>
                 <th className="py-3.5 px-4">Year of Study</th>
                 <th className="py-3.5 px-4">Section</th>
-                <th className="py-3.5 px-4">Strength</th>
                 <th className="py-3.5 px-4">Status</th>
                 <th className="py-3.5 px-4 text-right">Actions</th>
               </tr>
@@ -165,7 +160,6 @@ export default function ClassesPage() {
                   <td className="py-3 px-4 text-slate-700">{cls.academicYear}</td>
                   <td className="py-3 px-4 font-medium text-slate-800">{cls.yearOfStudy}</td>
                   <td className="py-3 px-4 font-bold text-brand-700">Section {cls.section}</td>
-                  <td className="py-3 px-4 text-slate-600">{cls.strength} Students</td>
                   <td className="py-3 px-4">
                     <span
                       className={`inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full text-xs font-semibold ${
@@ -261,32 +255,17 @@ export default function ClassesPage() {
                 </div>
               </div>
 
-              <div className="grid grid-cols-2 gap-3">
-                <div>
-                  <label className="block text-xs font-semibold uppercase tracking-wider text-slate-700 mb-1">
-                    Academic Year
-                  </label>
-                  <input
-                    type="text"
-                    required
-                    value={academicYear}
-                    onChange={(e) => setAcademicYear(e.target.value)}
-                    className="w-full px-3 py-2 text-sm border border-slate-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-brand-500 font-mono"
-                  />
-                </div>
-                <div>
-                  <label className="block text-xs font-semibold uppercase tracking-wider text-slate-700 mb-1">
-                    Class Strength
-                  </label>
-                  <input
-                    type="number"
-                    min="1"
-                    max="120"
-                    value={strength}
-                    onChange={(e) => setStrength(Number(e.target.value))}
-                    className="w-full px-3 py-2 text-sm border border-slate-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-brand-500"
-                  />
-                </div>
+              <div>
+                <label className="block text-xs font-semibold uppercase tracking-wider text-slate-700 mb-1">
+                  Academic Year
+                </label>
+                <input
+                  type="text"
+                  required
+                  value={academicYear}
+                  onChange={(e) => setAcademicYear(e.target.value)}
+                  className="w-full px-3 py-2 text-sm border border-slate-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-brand-500 font-mono"
+                />
               </div>
 
               <div className="flex justify-end gap-3 pt-3 border-t border-slate-100">

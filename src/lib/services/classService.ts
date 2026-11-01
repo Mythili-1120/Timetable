@@ -86,7 +86,6 @@ export async function createClass(
     academicYear: string;
     yearOfStudy: '1st Year' | '2nd Year' | '3rd Year' | '4th Year';
     section: string;
-    strength?: number;
   },
   adminUid: string
 ): Promise<ClassSection> {
@@ -98,7 +97,6 @@ export async function createClass(
     academicYear: data.academicYear,
     yearOfStudy: data.yearOfStudy,
     section: data.section.trim().toUpperCase(),
-    strength: data.strength || 60,
     status: 'ACTIVE',
     createdAt: new Date().toISOString(),
     updatedAt: new Date().toISOString()
