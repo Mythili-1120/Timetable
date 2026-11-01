@@ -23,8 +23,9 @@ export interface GenerationResult {
 
 export class TimetableEngine {
   /**
-   * Global Constraint Satisfaction Problem (CSP) Solver
-   * Enforces global conflict checks keyed strictly by `memberId + dayIdx + periodIdx`.
+   * Enterprise Global Constraint Satisfaction Problem (CSP) Solver
+   * Supports Single-Subject, Multi-Subject, Continuous Labs, and Multi-Tier Balanced Scheduling.
+   * Enforces global conflict prevention keyed strictly by `memberId + dayIdx + periodIdx`.
    */
   static generate(input: GenerationInput): GenerationResult {
     const {
@@ -41,14 +42,14 @@ export class TimetableEngine {
     const daysCount = collegeSettings.workingDays?.length || 6;
     const periods = collegeSettings.periods || [];
     const teachingPeriods = periods.filter(p => !p.isBreak);
-    const periodsPerDay = teachingPeriods.length; // 7
+    const periodsPerDay = teachingPeriods.length || 7;
 
-    // Initialize 6 x 7 empty grid
+    // Initialize Days x Periods empty grid
     const grid: (TimetableSlot | null)[][] = Array.from({ length: daysCount }, () =>
       Array(periodsPerDay).fill(null)
     );
 
-    // Calculate total required hours
+    // Validate and collect active assignments
     let totalRequired = 0;
     const validAssignments: TeachingAssignment[] = [];
     const diagnostics: string[] = [];
@@ -71,14 +72,26 @@ export class TimetableEngine {
       validAssignments.push(asgn);
     }
 
-    const weeklyCapacity = daysCount * periodsPerDay; // 42
+    if (validAssignments.length === 0) {
+      return {
+        success: false,
+        grid,
+        totalAllocated: 0,
+        totalRequired: 0,
+        diagnostics: ['No valid teaching assignments available to generate timetable.']
+      };
+    }
+
+    const weeklyCapacity = daysCount * periodsPerDay;
     if (totalRequired > weeklyCapacity) {
       return {
         success: false,
         grid,
         totalAllocated: 0,
         totalRequired,
-        diagnostics: [`Total required hours (${totalRequired}) exceed weekly timetable capacity (${weeklyCapacity} periods).`]
+        diagnostics: [
+          `Total required curriculum hours (${totalRequired} hrs) exceed weekly timetable capacity (${weeklyCapacity} periods).`
+        ]
       };
     }
 
@@ -86,20 +99,24 @@ export class TimetableEngine {
     const labAssignments = validAssignments.filter(a => a.type === 'Lab');
     const theoryAssignments = validAssignments.filter(a => a.type === 'Theory');
 
-    // 1. Place Lab Assignments First (Continuous Blocks)
+    // -------------------------------------------------------------------------
+    // 1. PLACE LAB ASSIGNMENTS FIRST (Continuous Multi-Period Blocks)
+    // -------------------------------------------------------------------------
     for (const lab of labAssignments) {
       const subj = subjectsMap.get(lab.subjectId)!;
       const staff = staffMap.get(lab.memberId)!;
-      const blockSize = subj.labBlockHours || lab.weeklyHours || 4;
+      const blockSize = subj.labBlockHours || lab.weeklyHours || (lab.weeklyHours >= 4 ? 4 : lab.weeklyHours >= 3 ? 3 : 2);
 
       let placed = false;
-      const validLabStarts = blockSize <= 3 ? [0, 1, 3, 5] : [0, 3]; // Avoid break overlaps
+      // Valid start periods to avoid crossing college breaks
+      const validLabStarts =
+        blockSize <= 2 ? [0, 1, 3, 5] : blockSize <= 3 ? [0, 3, 4] : [0, 3];
 
       for (let day = 0; day < daysCount && !placed; day++) {
         for (const startPeriod of validLabStarts) {
           if (startPeriod + blockSize > periodsPerDay) continue;
 
-          // Check if this class's slots are free
+          // Check if slots are free in this class grid and no global staff clash
           let canFit = true;
           for (let p = 0; p < blockSize; p++) {
             const periodIdx = startPeriod + p;
@@ -107,7 +124,6 @@ export class TimetableEngine {
               canFit = false;
               break;
             }
-            // Check global staff clash across entire institution
             const clashKey = `${lab.memberId}_${day}_${periodIdx}`;
             if (globalBusySlots.has(clashKey)) {
               canFit = false;
@@ -116,7 +132,6 @@ export class TimetableEngine {
           }
 
           if (canFit) {
-            // Allocate continuous lab block
             for (let p = 0; p < blockSize; p++) {
               const periodIdx = startPeriod + p;
               grid[day][periodIdx] = {
@@ -153,53 +168,85 @@ export class TimetableEngine {
       }
     }
 
-    // 2. Place Theory Assignments (Distributed evenly, zero consecutive repeats)
-    const theoryQueue: { asgn: TeachingAssignment; subj: Subject; staff: Staff }[] = [];
+    // -------------------------------------------------------------------------
+    // 2. PLACE THEORY ASSIGNMENTS (Balanced Scheduling with Multi-Tier Relaxation)
+    // -------------------------------------------------------------------------
+    // Build theory queue: one entry per single required teaching hour
+    const theoryQueue: { asgn: TeachingAssignment; subj: Subject; staff: Staff; hourIndex: number }[] = [];
     for (const t of theoryAssignments) {
       const subj = subjectsMap.get(t.subjectId)!;
       const staff = staffMap.get(t.memberId)!;
       for (let h = 0; h < t.weeklyHours; h++) {
-        theoryQueue.push({ asgn: t, subj, staff });
+        theoryQueue.push({ asgn: t, subj, staff, hourIndex: h });
       }
     }
 
-    // Sort queue by staff constraint load (most constrained first)
+    // Sort queue: most constrained faculty first
     theoryQueue.sort((a, b) => {
       let aClashes = 0, bClashes = 0;
-      globalBusySlots.forEach((val, key) => {
+      globalBusySlots.forEach((_, key) => {
         if (key.startsWith(`${a.asgn.memberId}_`)) aClashes++;
         if (key.startsWith(`${b.asgn.memberId}_`)) bClashes++;
       });
-      return bClashes - aClashes;
+      if (bClashes !== aClashes) return bClashes - aClashes;
+      return b.asgn.weeklyHours - a.asgn.weeklyHours;
     });
 
-    // Backtracking placement for theory
-    function solveTheory(idx: number): boolean {
+    // Helper: Staggered candidate periods for balanced rotation across days
+    function getCandidatePeriods(day: number, stagger: boolean): number[] {
+      if (!stagger) {
+        return Array.from({ length: periodsPerDay }, (_, i) => i);
+      }
+      // Rotates starting period by (day * 2) % periodsPerDay to prevent repetitive slots
+      const offset = (day * 2) % periodsPerDay;
+      return Array.from({ length: periodsPerDay }, (_, i) => (offset + i) % periodsPerDay);
+    }
+
+    // Backtracking solver parameterized by relaxation tier
+    function solveTier(
+      idx: number,
+      tier: 1 | 2 | 3,
+      workingGrid: (TimetableSlot | null)[][]
+    ): boolean {
       if (idx >= theoryQueue.length) return true;
 
       const { asgn, subj, staff } = theoryQueue[idx];
+      const targetMaxPerDay =
+        tier === 1
+          ? Math.max(1, Math.ceil(asgn.weeklyHours / daysCount))
+          : tier === 2
+          ? Math.min(3, Math.max(1, Math.ceil(asgn.weeklyHours / daysCount)) + 1)
+          : 4;
 
-      // Try each day and period
+      const enforceNoConsecutive = tier <= 2;
+      const staggerPeriods = tier === 1;
+
+      // Try each working day
       for (let d = 0; d < daysCount; d++) {
-        // Enforce max 1 period/day if total weekly hours <= daysCount
-        if (asgn.weeklyHours <= daysCount) {
-          const alreadyOnDay = grid[d].some(cell => cell && cell.subjectId === asgn.subjectId);
-          if (alreadyOnDay) continue;
-        }
+        // Daily capacity limit for this subject
+        const currentCountOnDay = workingGrid[d].reduce(
+          (acc, cell) => (cell && cell.subjectId === asgn.subjectId ? acc + 1 : acc),
+          0
+        );
+        if (currentCountOnDay >= targetMaxPerDay) continue;
 
-        for (let p = 0; p < periodsPerDay; p++) {
-          if (grid[d][p] !== null) continue;
+        const candidatePeriods = getCandidatePeriods(d, staggerPeriods);
+
+        for (const p of candidatePeriods) {
+          if (workingGrid[d][p] !== null) continue;
 
           // Prevent consecutive duplicate theory period
-          if (p > 0 && grid[d][p - 1]?.subjectId === asgn.subjectId) continue;
-          if (p < periodsPerDay - 1 && grid[d][p + 1]?.subjectId === asgn.subjectId) continue;
+          if (enforceNoConsecutive) {
+            if (p > 0 && workingGrid[d][p - 1]?.subjectId === asgn.subjectId) continue;
+            if (p < periodsPerDay - 1 && workingGrid[d][p + 1]?.subjectId === asgn.subjectId) continue;
+          }
 
-          // Check global staff collision
+          // Check global faculty collision across the institution
           const clashKey = `${asgn.memberId}_${d}_${p}`;
           if (globalBusySlots.has(clashKey)) continue;
 
-          // Tentatively place
-          grid[d][p] = {
+          // Tentative placement
+          workingGrid[d][p] = {
             dayIdx: d,
             periodIdx: p,
             memberId: asgn.memberId,
@@ -213,45 +260,63 @@ export class TimetableEngine {
             classLabel
           };
 
-          if (solveTheory(idx + 1)) return true;
+          if (solveTier(idx + 1, tier, workingGrid)) return true;
 
           // Backtrack
-          grid[d][p] = null;
+          workingGrid[d][p] = null;
         }
       }
 
       return false;
     }
 
-    const solved = solveTheory(0);
+    // Clone initial grid with labs placed
+    const cloneGrid = (source: (TimetableSlot | null)[][]): (TimetableSlot | null)[][] =>
+      source.map(row => [...row]);
 
-    // Calculate total allocated
+    // Multi-tier attempt: Tier 1 (Strict Balance) -> Tier 2 (Soft Relaxation) -> Tier 3 (Full Backtrack)
+    let solved = false;
+    let finalGrid = cloneGrid(grid);
+
+    if (theoryQueue.length === 0) {
+      solved = true;
+    } else {
+      for (const tier of [1, 2, 3] as const) {
+        const attemptGrid = cloneGrid(grid);
+        if (solveTier(0, tier, attemptGrid)) {
+          finalGrid = attemptGrid;
+          solved = true;
+          break;
+        }
+      }
+    }
+
+    // Count total successfully allocated slots
     let totalAllocated = 0;
     for (let d = 0; d < daysCount; d++) {
       for (let p = 0; p < periodsPerDay; p++) {
-        if (grid[d][p] !== null) totalAllocated++;
+        if (finalGrid[d][p] !== null) totalAllocated++;
       }
     }
 
     if (!solved || totalAllocated < totalRequired) {
       return {
         success: false,
-        grid,
+        grid: finalGrid,
         totalAllocated,
         totalRequired,
         diagnostics: [
-          `Constraint satisfaction failed: Could not allocate all ${totalRequired} hours without faculty collisions. Only ${totalAllocated} hours could be placed collision-free.`
+          `Constraint satisfaction failed: Could not allocate all ${totalRequired} curriculum hours without faculty collisions. Only ${totalAllocated} hours could be placed collision-free.`
         ]
       };
     }
 
     return {
       success: true,
-      grid,
+      grid: finalGrid,
       totalAllocated,
       totalRequired,
       diagnostics: []
     };
   }
 }
-

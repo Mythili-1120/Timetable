@@ -1,4 +1,4 @@
-import { collection, doc, getDoc, getDocs, setDoc, updateDoc } from 'firebase/firestore';
+import { collection, doc, getDoc, getDocs, setDoc, updateDoc, deleteDoc } from 'firebase/firestore';
 import { db } from '../firebase/config';
 import { Department } from '../../types';
 import { logAdminAction } from './auditService';
@@ -113,6 +113,159 @@ export async function archiveDepartment(departmentId: string, adminUid: string):
   }, adminUid);
   invalidateDepartmentCache();
   await logAdminAction(adminUid, 'ARCHIVE_DEPARTMENT', 'departments', departmentId);
+}
+
+export interface DepartmentDeletionSafetyCheck {
+  canDelete: boolean;
+  blockingReasons: string[];
+}
+
+/**
+ * Validates whether a department can be safely deleted without breaking referential integrity,
+ * staff relationships, subjects, classes, teaching assignments, or timetable snapshots.
+ */
+export async function checkDepartmentDeletionSafety(departmentId: string): Promise<DepartmentDeletionSafetyCheck> {
+  const blockingReasons: string[] = [];
+  const cleanId = departmentId.trim().toLowerCase();
+  const rawCode = cleanId.replace(/^dept-/, '');
+
+  // Helper to match department ID (case-insensitive, handling both "dept-xxx" and "xxx")
+  const matchesDept = (id?: string | null) => {
+    if (!id) return false;
+    const lower = id.trim().toLowerCase();
+    return lower === cleanId || lower === rawCode || lower === `dept-${rawCode}`;
+  };
+
+  // 1. Check Primary Staff
+  try {
+    const staffSnap = await getDocs(collection(db, 'staff'));
+    const matchingStaff = staffSnap.docs.filter(d => {
+      const data = d.data();
+      return matchesDept(data.primaryDepartmentId) || matchesDept(data.departmentId);
+    });
+    if (matchingStaff.length > 0) {
+      blockingReasons.push(
+        `${matchingStaff.length} faculty member(s) have this department configured as their primary department. Reassign or delete these staff members first.`
+      );
+    }
+  } catch (err) {
+    console.error('Error checking staff during department delete check:', err);
+  }
+
+  // 2. Check Secondary Staff Department Links
+  try {
+    const linksSnap = await getDocs(collection(db, 'staffDepartmentLinks'));
+    const matchingLinks = linksSnap.docs.filter(d => matchesDept(d.data().departmentId));
+    if (matchingLinks.length > 0) {
+      blockingReasons.push(
+        `${matchingLinks.length} faculty secondary department link(s) point to this department. Remove these links first.`
+      );
+    }
+  } catch (err) {
+    console.error('Error checking staff links during department delete check:', err);
+  }
+
+  // 3. Check Subjects
+  try {
+    const subjectsSnap = await getDocs(collection(db, 'subjects'));
+    const matchingSubjects = subjectsSnap.docs.filter(d => matchesDept(d.data().departmentId));
+    if (matchingSubjects.length > 0) {
+      blockingReasons.push(
+        `${matchingSubjects.length} subject(s) in Subject Master belong to this department. Delete or reassign these subjects first.`
+      );
+    }
+  } catch (err) {
+    console.error('Error checking subjects during department delete check:', err);
+  }
+
+  // 4. Check Classes & Sections
+  try {
+    const classesSnap = await getDocs(collection(db, 'classes'));
+    const matchingClasses = classesSnap.docs.filter(d => matchesDept(d.data().departmentId));
+    if (matchingClasses.length > 0) {
+      blockingReasons.push(
+        `${matchingClasses.length} class section(s) belong to this department. Delete or reassign these classes first.`
+      );
+    }
+  } catch (err) {
+    console.error('Error checking classes during department delete check:', err);
+  }
+
+  // 5. Check Teaching Assignments
+  try {
+    const asgnSnap = await getDocs(collection(db, 'teachingAssignments'));
+    const matchingAsgns = asgnSnap.docs.filter(d => matchesDept(d.data().departmentId));
+    if (matchingAsgns.length > 0) {
+      blockingReasons.push(
+        `${matchingAsgns.length} teaching assignment(s) exist under this department. Delete or reassign these assignments first.`
+      );
+    }
+  } catch (err) {
+    console.error('Error checking teaching assignments during department delete check:', err);
+  }
+
+  // 6. Check Draft Timetables
+  try {
+    const ttSnap = await getDocs(collection(db, 'timetables'));
+    const matchingTimetables = ttSnap.docs.filter(d => matchesDept(d.data().departmentId));
+    if (matchingTimetables.length > 0) {
+      blockingReasons.push(
+        `${matchingTimetables.length} draft timetable(s) belong to this department. Delete them first.`
+      );
+    }
+  } catch (err) {
+    console.error('Error checking timetables during department delete check:', err);
+  }
+
+  // 7. Check Published Timetables
+  try {
+    const pubSnap = await getDocs(collection(db, 'publishedTimetables'));
+    const matchingPub = pubSnap.docs.filter(d => matchesDept(d.data().departmentId));
+    if (matchingPub.length > 0) {
+      blockingReasons.push(
+        `${matchingPub.length} published historical timetable snapshot(s) belong to this department. Historical snapshots cannot be deleted. Use 'Archive Department' instead of permanent deletion.`
+      );
+    }
+  } catch (err) {
+    console.error('Error checking published timetables during department delete check:', err);
+  }
+
+  return {
+    canDelete: blockingReasons.length === 0,
+    blockingReasons
+  };
+}
+
+/**
+ * Permanently deletes a department from Firestore after verifying all referential integrity checks.
+ */
+export async function deleteDepartment(departmentId: string, adminUid: string): Promise<void> {
+  const safety = await checkDepartmentDeletionSafety(departmentId);
+  if (!safety.canDelete) {
+    const reasonText = safety.blockingReasons.join('\n• ');
+    throw new Error(
+      `Cannot delete department (${departmentId}):\n• ${reasonText}`
+    );
+  }
+
+  try {
+    await deleteDoc(doc(db, 'departments', departmentId));
+    invalidateDepartmentCache();
+    await logAdminAction(adminUid, 'DELETE_DEPARTMENT', 'departments', departmentId);
+  } catch (err: any) {
+    console.error('Error during department deletion:', err);
+    if (err?.code === 'permission-denied' || err?.message?.toLowerCase().includes('permissions')) {
+      throw new Error(
+        `Cloud Firestore permission-denied: The live security rules on project 'timetable-76d9f' disallow deletion of /departments documents.\n\n` +
+        `ROOT CAUSE:\n` +
+        `The live Cloud Firestore database requires an authenticated administrator session to delete departments.\n\n` +
+        `FIX:\n` +
+        `1. Ensure you are signed in as an administrator (admin@ssmiet.ac.in or admin@gmail.com).\n` +
+        `2. Ensure the latest firestore.rules is published in Firebase Console: https://console.firebase.google.com/project/timetable-76d9f/firestore/rules`
+      );
+    }
+    throw err;
+  }
 }
 
 // ============================================================================

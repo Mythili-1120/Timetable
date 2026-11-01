@@ -2,7 +2,7 @@ import { collection, doc, getDocs, getDoc, setDoc, updateDoc, deleteDoc, query, 
 import { db } from '../firebase/config';
 import { TeachingAssignment, ClassSection, Staff, Subject, StaffDepartmentLink, SubjectResolutionResult } from '../../types';
 import { logAdminAction } from './auditService';
-import { getAllStaffDepartmentLinks, getStaffById, linkStaffToDepartment, invalidateStaffCache } from './staffService';
+import { getAllStaffDepartmentLinks, getStaffById, linkStaffToDepartment, invalidateStaffCache, getAllStaff } from './staffService';
 import { getAllSubjects } from './subjectService';
 import { getAllClasses } from './classService';
 
@@ -145,6 +145,85 @@ export async function getAssignments(
   }
 }
 
+/**
+ * Canonical Staff Subject Eligibility Validator.
+ * Verifies that a staff member is configured and eligible to teach a subject in the relevant department.
+ * Rules:
+ * 1. Staff must belong to or be validly linked to the relevant Department.
+ * 2. Staff must have the selected Subject in their canonical Subject eligibility records.
+ * 3. Subject identity must match by Subject ID.
+ * 4. Staff identity must match by permanent Member ID.
+ * 5. A Staff member without the required Subject eligibility must not be silently assigned.
+ */
+export async function validateStaffSubjectEligibility(
+  memberId: string,
+  departmentId: string,
+  subjectId: string
+): Promise<{ isEligible: boolean; error?: string }> {
+  if (!memberId?.trim()) {
+    return { isEligible: false, error: 'Faculty member ID is required.' };
+  }
+  if (!departmentId?.trim()) {
+    return { isEligible: false, error: 'Department ID is required.' };
+  }
+  if (!subjectId?.trim()) {
+    return { isEligible: false, error: 'Subject ID is required.' };
+  }
+
+  const [staff, allLinks, allSubjects] = await Promise.all([
+    getStaffById(memberId),
+    getAllStaffDepartmentLinks(),
+    getAllSubjects(departmentId)
+  ]);
+
+  if (!staff || staff.status !== 'ACTIVE') {
+    return {
+      isEligible: false,
+      error: `Faculty member [${memberId}] does not exist or is inactive.`
+    };
+  }
+
+  // 1. Verify Department affiliation (primary department OR active staffDepartmentLink)
+  const isPrimaryDept = staff.primaryDepartmentId === departmentId;
+  const activeLink = allLinks.find(
+    l => l.memberId === memberId && l.departmentId === departmentId && l.status === 'ACTIVE'
+  );
+
+  if (!isPrimaryDept && !activeLink) {
+    return {
+      isEligible: false,
+      error: `Faculty member ${staff.displayName || memberId} is not affiliated or linked with department [${departmentId}].`
+    };
+  }
+
+  // 2. Verify Subject belongs to department
+  const subjectExists = allSubjects.some(s => s.subjectId === subjectId);
+  if (!subjectExists) {
+    return {
+      isEligible: false,
+      error: `Subject [${subjectId}] does not belong to the selected department.`
+    };
+  }
+
+  // 3. Verify Subject Eligibility
+  const eligibleSubjectIds = new Set<string>();
+  if (Array.isArray(staff.subjectIds)) {
+    staff.subjectIds.forEach(id => eligibleSubjectIds.add(id));
+  }
+  if (activeLink && Array.isArray(activeLink.subjectIds)) {
+    activeLink.subjectIds.forEach(id => eligibleSubjectIds.add(id));
+  }
+
+  if (!eligibleSubjectIds.has(subjectId)) {
+    return {
+      isEligible: false,
+      error: 'This Staff member is not configured as eligible for the selected Subject. Update Staff Subject details before assigning.'
+    };
+  }
+
+  return { isEligible: true };
+}
+
 export async function createAssignment(
   data: {
     memberId: string;
@@ -162,6 +241,12 @@ export async function createAssignment(
   const validation = validateAssignmentInput(data);
   if (!validation.isValid) {
     throw new Error(validation.error || 'Invalid assignment input');
+  }
+
+  // Verify Staff Subject Eligibility before saving
+  const eligibility = await validateStaffSubjectEligibility(data.memberId, data.departmentId, data.subjectId);
+  if (!eligibility.isEligible) {
+    throw new Error(eligibility.error);
   }
 
   const assignmentId = data.assignmentId || (
@@ -286,9 +371,17 @@ export async function getStaffMappedSubjectIds(
   memberId: string,
   departmentId: string
 ): Promise<string[]> {
-  const allLinks = await getAllStaffDepartmentLinks();
+  const [allLinks, staffMember] = await Promise.all([
+    getAllStaffDepartmentLinks(),
+    getStaffById(memberId)
+  ]);
   const link = allLinks.find(l => l.memberId === memberId && l.departmentId === departmentId && l.status === 'ACTIVE');
   const mappedSet = new Set<string>(link?.subjectIds || []);
+
+  // Include canonical subjectIds stored directly on the Staff document
+  if (staffMember?.subjectIds && Array.isArray(staffMember.subjectIds)) {
+    staffMember.subjectIds.forEach(id => mappedSet.add(id));
+  }
 
   // Also include previously confirmed assignments in this department
   const assignments = await getAssignments({ memberId, departmentId });
@@ -594,4 +687,169 @@ export async function getDepartmentAssignmentCount(departmentId: string): Promis
 export async function getGlobalAssignmentCount(): Promise<number> {
   const list = await getAssignments();
   return list.length;
+}
+
+// ============================================================================
+// SUBJECT-WISE STAFF VALIDATION ENGINE
+// ============================================================================
+
+export interface SubjectStaffValidationResult {
+  isValid: boolean;
+  canGenerate: boolean;
+  totalRequiredHours: number;
+  curriculumSubjects: Subject[];
+  assignedSubjects: {
+    subject: Subject;
+    assignment: TeachingAssignment;
+    staff: Staff;
+  }[];
+  missingStaffSubjects: Subject[];
+  blockingErrors: string[];
+}
+
+/**
+ * Subject-Wise Staff Validation:
+ * Validates that every curriculum subject in the selected class/semester scope has an active,
+ * eligible Staff assignment. If any subject is missing an assigned Staff member, returns blocking errors.
+ * Never creates warnings for faculty members whose subjects are not in the selected scope.
+ */
+export async function validateSubjectStaffForClass(
+  classInput: string | ClassSection,
+  semester?: string
+): Promise<SubjectStaffValidationResult> {
+  const [allClasses, allSubjects, allStaff] = await Promise.all([
+    getAllClasses(),
+    getAllSubjects(),
+    getAllStaff()
+  ]);
+
+  const classSection = typeof classInput === 'string'
+    ? allClasses.find((c: ClassSection) => c.classId === classInput)
+    : classInput;
+
+  if (!classSection) {
+    return {
+      isValid: false,
+      canGenerate: false,
+      totalRequiredHours: 0,
+      curriculumSubjects: [],
+      assignedSubjects: [],
+      missingStaffSubjects: [],
+      blockingErrors: ['Selected class section was not found in the database.']
+    };
+  }
+
+  // 1. Get curriculum subjects for this class section
+  const deptSubjects = allSubjects.filter((s: Subject) => {
+    if (s.status !== 'ACTIVE') return false;
+    if (s.departmentId !== classSection.departmentId) return false;
+    if (s.yearOfStudy && classSection.yearOfStudy && s.yearOfStudy !== classSection.yearOfStudy) {
+      return false;
+    }
+    return true;
+  });
+
+  // Filter by semester if specified (e.g. 'Semester 1')
+  const scopedSubjects = deptSubjects.filter((s: Subject) => {
+    if (semester && semester !== 'ALL' && s.semester) {
+      return s.semester === semester;
+    }
+    return true;
+  });
+
+  if (scopedSubjects.length === 0) {
+    return {
+      isValid: false,
+      canGenerate: false,
+      totalRequiredHours: 0,
+      curriculumSubjects: [],
+      assignedSubjects: [],
+      missingStaffSubjects: [],
+      blockingErrors: [
+        `No active curriculum subjects found for ${classSection.yearOfStudy} - Section ${classSection.section}. Please add subjects in Department / Subject Master first.`
+      ]
+    };
+  }
+
+  // 2. Get teaching assignments for this class
+  let assignments = await getAssignments({ classId: classSection.classId });
+  if (semester && semester !== 'ALL') {
+    const semAsgns = assignments.filter(a => a.semester === semester);
+    if (semAsgns.length > 0) {
+      assignments = semAsgns;
+    }
+  }
+
+  const staffMap = new Map<string, Staff>();
+  allStaff.forEach((st: Staff) => staffMap.set(st.memberId, st));
+
+  const asgnMap = new Map<string, TeachingAssignment>();
+  assignments.forEach(a => {
+    if (a.status === 'ACTIVE') {
+      asgnMap.set(a.subjectId, a);
+    }
+  });
+
+  const assignedSubjects: { subject: Subject; assignment: TeachingAssignment; staff: Staff }[] = [];
+  const missingStaffSubjects: Subject[] = [];
+  const blockingErrors: string[] = [];
+  let totalRequiredHours = 0;
+
+  const allDeptLinks = await getAllStaffDepartmentLinks();
+  const linkSubjMap = new Map<string, string[]>();
+  allDeptLinks.forEach(l => {
+    if (l.status === 'ACTIVE') {
+      const key = `${l.memberId}_${l.departmentId}`;
+      linkSubjMap.set(key, l.subjectIds || []);
+    }
+  });
+
+  for (const subj of scopedSubjects) {
+    totalRequiredHours += Number(subj.weeklyHours) || (subj.type === 'Lab' ? 4 : 3);
+    const asgn = asgnMap.get(subj.subjectId);
+
+    if (!asgn || !asgn.memberId?.trim()) {
+      missingStaffSubjects.push(subj);
+      blockingErrors.push(
+        `Staff assignment is missing for ${subj.name}. Please assign an eligible Staff member before generating the timetable.`
+      );
+      continue;
+    }
+
+    const staff = staffMap.get(asgn.memberId);
+    if (!staff || staff.status === 'INACTIVE') {
+      missingStaffSubjects.push(subj);
+      blockingErrors.push(
+        `Assigned Staff member [${asgn.memberId}] for ${subj.name} is inactive or not found in the staff directory.`
+      );
+      continue;
+    }
+
+    // Verify canonical Subject eligibility: staff.subjectIds or link.subjectIds
+    const staffEligibleSubjs = Array.isArray(staff.subjectIds) ? staff.subjectIds : [];
+    const linkEligibleSubjs = linkSubjMap.get(`${staff.memberId}_${classSection.departmentId}`) || [];
+    const isEligible = staffEligibleSubjs.includes(subj.subjectId) || linkEligibleSubjs.includes(subj.subjectId);
+
+    if (!isEligible) {
+      missingStaffSubjects.push(subj);
+      blockingErrors.push(
+        `Staff assignment is missing for ${subj.name}. Assigned faculty ${staff.displayName || staff.memberId} is not eligible for this subject.`
+      );
+      continue;
+    }
+
+    assignedSubjects.push({ subject: subj, assignment: asgn, staff });
+  }
+
+  const isValid = missingStaffSubjects.length === 0 && blockingErrors.length === 0;
+
+  return {
+    isValid,
+    canGenerate: isValid,
+    totalRequiredHours,
+    curriculumSubjects: scopedSubjects,
+    assignedSubjects,
+    missingStaffSubjects,
+    blockingErrors
+  };
 }

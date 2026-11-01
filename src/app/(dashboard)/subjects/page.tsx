@@ -69,7 +69,7 @@ export default function SubjectsPage() {
           name: name.trim(),
           type,
           weeklyHours: Number(weeklyHours),
-          labBlockHours: type === 'Lab' ? Number(labBlockHours) : undefined,
+          ...(type === 'Lab' ? { labBlockHours: Number(labBlockHours) || 4 } : {}),
           departmentId
         }, user.uid);
       } else {
@@ -78,7 +78,7 @@ export default function SubjectsPage() {
           name: name.trim(),
           type,
           weeklyHours: Number(weeklyHours),
-          labBlockHours: type === 'Lab' ? Number(labBlockHours) : undefined,
+          ...(type === 'Lab' ? { labBlockHours: Number(labBlockHours) || 4 } : {}),
           departmentId,
           academicYear: '2025–2026'
         }, user.uid);

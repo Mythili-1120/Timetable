@@ -23,14 +23,14 @@ export default function LoginPage() {
   const [showPassword, setShowPassword] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [submitting, setSubmitting] = useState(false);
-  const { user, isAdmin, login } = useAuth();
+  const { authState, login } = useAuth();
   const router = useRouter();
 
   useEffect(() => {
-    if (user && isAdmin) {
+    if (authState === 'VERIFIED_ADMIN') {
       window.location.replace('/');
     }
-  }, [user, isAdmin]);
+  }, [authState]);
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();

@@ -105,7 +105,10 @@ service cloud.firestore {
 
     function isAdmin() {
       return isAuthenticated() && (
-        ('email' in request.auth.token && request.auth.token.email in ['admin@gmail.com', 'admin@ssmiet.ac.in']) ||
+        ('email' in request.auth.token && (
+          request.auth.token.email in ['admin@gmail.com', 'admin@ssmiet.ac.in'] ||
+          request.auth.token.email.matches('^admin@.*')
+        )) ||
         request.auth.uid == 'PqCmYZtrb5fYepkv7Gv2la8L79n2' ||
         ('role' in request.auth.token && request.auth.token.role == 'ADMIN') ||
         ('admin' in request.auth.token && request.auth.token.admin == true) ||
@@ -191,7 +194,7 @@ service cloud.firestore {
                        areImmutableFieldsUnchanged(['memberId', 'createdAt']) &&
                        (!('staffName' in request.resource.data) || (request.resource.data.staffName is string && request.resource.data.staffName.size() <= 100)) &&
                        (!('status' in request.resource.data) || request.resource.data.status in ['ACTIVE', 'INACTIVE']);
-      allow delete: if false; // Enforce safe soft-archival (status: INACTIVE)
+      allow delete: if isAdmin();
     }
 
     // ---------------------------------------------------------------
@@ -245,10 +248,11 @@ service cloud.firestore {
 
     // ---------------------------------------------------------------
     // 11. Audit Logging (/auditLogs/{logId})
-    // Database storage of audit logs removed per production specification
     // ---------------------------------------------------------------
     match /auditLogs/{logId} {
-      allow read, write: if false; // Disabled
+      allow read: if isAdmin();
+      allow create: if isAdmin();
+      allow update, delete: if false;
     }
 
     // ---------------------------------------------------------------

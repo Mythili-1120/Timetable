@@ -1,8 +1,9 @@
-import { collection, doc, getDocs, getDoc, setDoc, updateDoc, query, where } from 'firebase/firestore';
+import { collection, doc, getDocs, getDoc, setDoc, updateDoc, deleteDoc, writeBatch, query, where } from 'firebase/firestore';
 import { db } from '../firebase/config';
 import { Staff, StaffDepartmentLink } from '../../types';
 import { generateNextMemberId } from './idService';
 import { logAdminAction } from './auditService';
+import { validatePhoneNumber } from '../utils/phoneValidation';
 
 // In-memory cache for fast responsive navigation
 let cachedStaff: Staff[] | null = null;
@@ -175,6 +176,8 @@ export async function createStaff(
     initials: string;
     email?: string;
     phone?: string;
+    phoneNumber?: string;
+    subjectIds?: string[];
     designation: string;
     primaryDepartmentId: string;
   },
@@ -187,13 +190,27 @@ export async function createStaff(
   const initClean = (data.initials || '').trim().toUpperCase();
   const displayName = initClean ? `${nameClean} (${initClean})` : nameClean;
 
+  const rawPhone = (data.phoneNumber || data.phone || '').trim();
+  if (rawPhone) {
+    const phoneRes = validatePhoneNumber(rawPhone);
+    if (!phoneRes.isValid) {
+      throw new Error(phoneRes.error || 'Invalid phone number format.');
+    }
+  }
+
+  const subjectIds = Array.isArray(data.subjectIds)
+    ? Array.from(new Set(data.subjectIds.filter(Boolean)))
+    : [];
+
   const staffRecord: Staff = {
     memberId,
     staffName: nameClean,
     initials: initClean,
     displayName,
     email: (data.email || '').trim().toLowerCase(),
-    phone: (data.phone || '').trim(),
+    phone: rawPhone,
+    phoneNumber: rawPhone,
+    subjectIds,
     designation: data.designation.trim() || 'Assistant Professor',
     primaryDepartmentId: data.primaryDepartmentId,
     status: 'ACTIVE',
@@ -204,14 +221,16 @@ export async function createStaff(
   // 2. Write global staff document
   await setDoc(doc(db, 'staff', memberId), staffRecord);
 
-  // 3. Create primary department link
+  // 3. Create primary department link with subjectIds
   const linkId = `${memberId}_${data.primaryDepartmentId}`;
   const linkRecord: StaffDepartmentLink = {
     linkId,
     memberId,
     departmentId: data.primaryDepartmentId,
+    subjectIds,
     status: 'ACTIVE',
-    createdAt: new Date().toISOString()
+    createdAt: new Date().toISOString(),
+    updatedAt: new Date().toISOString()
   };
   await setDoc(doc(db, 'staffDepartmentLinks', linkId), linkRecord);
   invalidateStaffCache();
@@ -225,7 +244,10 @@ export async function createStaff(
  */
 export async function updateStaff(
   memberId: string,
-  updates: Partial<Omit<Staff, 'memberId' | 'createdAt'>>,
+  updates: Partial<Omit<Staff, 'memberId' | 'createdAt'>> & {
+    phoneNumber?: string;
+    subjectIds?: string[];
+  },
   adminUid: string
 ): Promise<void> {
   const ref = doc(db, 'staff', memberId);
@@ -236,15 +258,60 @@ export async function updateStaff(
   const initClean = updates.initials !== undefined ? updates.initials.trim().toUpperCase() : existing.initials;
   const displayName = initClean ? `${nameClean} (${initClean})` : nameClean;
 
-  const cleanUpdates = {
+  const rawPhone = updates.phoneNumber !== undefined
+    ? updates.phoneNumber.trim()
+    : updates.phone !== undefined
+    ? updates.phone.trim()
+    : (existing.phoneNumber || existing.phone || '').trim();
+
+  if (rawPhone) {
+    const phoneRes = validatePhoneNumber(rawPhone);
+    if (!phoneRes.isValid) {
+      throw new Error(phoneRes.error || 'Invalid phone number format.');
+    }
+  }
+
+  const subjectIds = updates.subjectIds !== undefined
+    ? Array.from(new Set(updates.subjectIds.filter(Boolean)))
+    : existing.subjectIds || [];
+
+  const cleanUpdates: Record<string, any> = {
     ...updates,
     staffName: nameClean,
     initials: initClean,
     displayName,
+    phone: rawPhone,
+    phoneNumber: rawPhone,
+    subjectIds,
     updatedAt: new Date().toISOString()
   };
 
   await updateDoc(ref, cleanUpdates);
+
+  // Synchronize subjectIds to the primary department link
+  const targetDeptId = updates.primaryDepartmentId || existing.primaryDepartmentId;
+  if (targetDeptId) {
+    const linkId = `${memberId}_${targetDeptId}`;
+    const linkRef = doc(db, 'staffDepartmentLinks', linkId);
+    const linkSnap = await getDoc(linkRef);
+    if (linkSnap.exists()) {
+      await updateDoc(linkRef, {
+        subjectIds,
+        updatedAt: new Date().toISOString()
+      });
+    } else {
+      await setDoc(linkRef, {
+        linkId,
+        memberId,
+        departmentId: targetDeptId,
+        subjectIds,
+        status: 'ACTIVE',
+        createdAt: new Date().toISOString(),
+        updatedAt: new Date().toISOString()
+      });
+    }
+  }
+
   invalidateStaffCache();
   await logAdminAction(adminUid, 'UPDATE_STAFF', 'staff', memberId, cleanUpdates);
 }
@@ -271,6 +338,153 @@ export async function archiveStaff(memberId: string, adminUid: string): Promise<
   invalidateStaffCache();
 
   await logAdminAction(adminUid, 'ARCHIVE_STAFF', 'staff', memberId);
+}
+
+export interface StaffDeletionSafetyCheck {
+  canDelete: boolean;
+  blockingReasons: string[];
+}
+
+/**
+ * Validates whether a staff member can be permanently deleted without breaking
+ * referential integrity, active teaching assignments, or published timetable history.
+ */
+export async function checkStaffDeletionSafety(memberId: string): Promise<StaffDeletionSafetyCheck> {
+  const blockingReasons: string[] = [];
+
+  // 1. Check Active & Historical Teaching Assignments
+  try {
+    const asgnSnap = await getDocs(
+      query(collection(db, 'teachingAssignments'), where('memberId', '==', memberId))
+    );
+    if (!asgnSnap.empty) {
+      const activeCount = asgnSnap.docs.filter(d => (d.data() as any).status !== 'INACTIVE').length;
+      blockingReasons.push(
+        `Faculty member is referenced in ${asgnSnap.size} teaching assignment(s) (${activeCount} currently active). Please remove or reassign these teaching assignments first.`
+      );
+    }
+  } catch (err) {
+    console.error('Error checking teaching assignments during staff delete safety check:', err);
+  }
+
+  // 2. Check Draft & Working Timetables
+  try {
+    const ttSnap = await getDocs(collection(db, 'timetables'));
+    let draftOccurrences = 0;
+    const affectedClasses: string[] = [];
+    ttSnap.docs.forEach(docSnap => {
+      const data = docSnap.data();
+      if (Array.isArray(data.grid)) {
+        let hasMember = false;
+        data.grid.forEach((day: any) => {
+          if (Array.isArray(day)) {
+            day.forEach((slot: any) => {
+              if (slot && (slot.memberId === memberId || slot.assignedStaffId === memberId)) {
+                draftOccurrences++;
+                hasMember = true;
+              }
+            });
+          }
+        });
+        if (hasMember) {
+          affectedClasses.push(data.classId || docSnap.id);
+        }
+      }
+    });
+    if (draftOccurrences > 0) {
+      blockingReasons.push(
+        `Faculty member is scheduled in ${draftOccurrences} slot(s) across draft timetable(s) for class(es): ${affectedClasses.slice(0, 3).join(', ')}${affectedClasses.length > 3 ? '...' : ''}. Clear these slots or regenerate the timetables before deletion.`
+      );
+    }
+  } catch (err) {
+    console.error('Error checking draft timetables during staff delete safety check:', err);
+  }
+
+  // 3. Check Published Timetable Historical Snapshots
+  try {
+    const pubSnap = await getDocs(collection(db, 'publishedTimetables'));
+    let pubOccurrences = 0;
+    pubSnap.docs.forEach(docSnap => {
+      const data = docSnap.data();
+      if (Array.isArray(data.allocations)) {
+        const found = data.allocations.some((slot: any) => slot && slot.memberId === memberId);
+        if (found) pubOccurrences++;
+      } else if (Array.isArray(data.grid)) {
+        let found = false;
+        data.grid.forEach((day: any) => {
+          if (Array.isArray(day)) {
+            day.forEach((slot: any) => {
+              if (slot && slot.memberId === memberId) found = true;
+            });
+          }
+        });
+        if (found) pubOccurrences++;
+      }
+    });
+    if (pubOccurrences > 0) {
+      blockingReasons.push(
+        `Faculty member is referenced in ${pubOccurrences} published historical timetable snapshot(s). Published timetables are immutable historical records. Deleting this member would invalidate academic history. Please use 'Deactivate' (Archive) instead of permanent deletion.`
+      );
+    }
+  } catch (err) {
+    console.error('Error checking published timetables during staff delete safety check:', err);
+  }
+
+  return {
+    canDelete: blockingReasons.length === 0,
+    blockingReasons
+  };
+}
+
+/**
+ * Permanently deletes a staff member and their associated department links from Firestore.
+ * Strictly verifies referential integrity and blocks deletion if protected dependencies exist.
+ */
+export async function deleteStaff(memberId: string, adminUid: string): Promise<void> {
+  const safety = await checkStaffDeletionSafety(memberId);
+  if (!safety.canDelete) {
+    const reasonText = safety.blockingReasons.join('\n• ');
+    throw new Error(
+      `Cannot delete staff member (${memberId}):\n• ${reasonText}`
+    );
+  }
+
+  try {
+    const batch = writeBatch(db);
+
+    // 1. Queue deletion of associated department links
+    const linksSnap = await getDocs(
+      query(collection(db, 'staffDepartmentLinks'), where('memberId', '==', memberId))
+    );
+    linksSnap.docs.forEach(linkDoc => {
+      batch.delete(doc(db, 'staffDepartmentLinks', linkDoc.id));
+    });
+
+    // 2. Queue deletion of canonical staff document
+    batch.delete(doc(db, 'staff', memberId));
+
+    // 3. Atomically commit all deletions
+    await batch.commit();
+
+    // 4. Invalidate caches and log audit
+    invalidateStaffCache();
+    await logAdminAction(adminUid, 'DELETE_STAFF', 'staff', memberId);
+  } catch (err: any) {
+    console.error('Error during staff deletion:', err);
+    if (err?.code === 'permission-denied' || err?.message?.toLowerCase().includes('permissions')) {
+      throw new Error(
+        `Cloud Firestore permission-denied: The live security rules on project 'timetable-76d9f' disallow permanent deletion of /staff documents ('allow delete: if false;').\n\n` +
+        `ROOT CAUSE:\n` +
+        `The project's local firestore.rules has been updated with 'allow delete: if isAdmin();', but the live Cloud Firestore database is still running the old deployed rules.\n\n` +
+        `PERMANENT FIX:\n` +
+        `1. Open Firebase Console Rules: https://console.firebase.google.com/project/timetable-76d9f/firestore/rules\n` +
+        `2. In match /staff/{memberId}, update to 'allow delete: if isAdmin();' (or paste the contents of your local firestore.rules).\n` +
+        `3. Click 'Publish'.\n\n` +
+        `Alternative: Use 'Deactivate Staff (Archive)' from the directory table to soft-archive this faculty member without requiring hard Firestore document deletion.`
+      );
+    }
+    throw err;
+  }
 }
 
 /**

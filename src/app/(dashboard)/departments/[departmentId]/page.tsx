@@ -301,8 +301,8 @@ export default function DepartmentDetailPage() {
             name: subjName.trim(),
             type: subjType,
             weeklyHours: Number(subjHours),
-            labBlockHours: subjType === 'Lab' ? Number(subjLabBlock) : undefined,
-            yearOfStudy: subjYearOfStudy
+            ...(subjType === 'Lab' ? { labBlockHours: Number(subjLabBlock) || 4 } : {}),
+            ...(subjYearOfStudy ? { yearOfStudy: subjYearOfStudy } : {})
           },
           user.uid
         );
@@ -313,10 +313,10 @@ export default function DepartmentDetailPage() {
             name: subjName.trim(),
             type: subjType,
             weeklyHours: Number(subjHours),
-            labBlockHours: subjType === 'Lab' ? Number(subjLabBlock) : undefined,
+            ...(subjType === 'Lab' ? { labBlockHours: Number(subjLabBlock) || 4 } : {}),
             departmentId,
             academicYear: '2025–2026',
-            yearOfStudy: subjYearOfStudy
+            ...(subjYearOfStudy ? { yearOfStudy: subjYearOfStudy } : {})
           },
           user.uid
         );

@@ -7,7 +7,8 @@ import {
   getCachedDepartments,
   createDepartment,
   updateDepartment,
-  archiveDepartment
+  archiveDepartment,
+  deleteDepartment
 } from '../../../lib/services/departmentService';
 import {
   getAllDepartmentStaffCounts,
@@ -29,7 +30,9 @@ import {
   ArrowRight,
   Edit2,
   Archive,
-  GraduationCap
+  GraduationCap,
+  Trash2,
+  AlertTriangle
 } from 'lucide-react';
 
 export default function DepartmentsPage() {
@@ -55,6 +58,12 @@ export default function DepartmentsPage() {
   const [description, setDescription] = useState('');
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
+
+  // Department Delete modal state
+  const [deleteConfirmOpen, setDeleteConfirmOpen] = useState(false);
+  const [deptToDelete, setDeptToDelete] = useState<Department | null>(null);
+  const [deleting, setDeleting] = useState(false);
+  const [deleteError, setDeleteError] = useState<string | null>(null);
 
   const { user } = useAuth();
 
@@ -149,6 +158,23 @@ export default function DepartmentsPage() {
       }
     } catch (err: any) {
       alert(`Error updating department status: ${err?.message || 'Permission denied'}`);
+    }
+  };
+
+  const handleDeleteDept = async () => {
+    if (!deptToDelete || !user) return;
+    setDeleting(true);
+    setDeleteError(null);
+    try {
+      await deleteDepartment(deptToDelete.departmentId, user.uid);
+      setDeleteConfirmOpen(false);
+      setDeptToDelete(null);
+      await loadData(true);
+    } catch (err: any) {
+      console.error('Failed to delete department:', err);
+      setDeleteError(err?.message || 'Failed to delete department.');
+    } finally {
+      setDeleting(false);
     }
   };
 
@@ -457,6 +483,19 @@ export default function DepartmentsPage() {
                         >
                           <Archive className="w-4 h-4" />
                         </button>
+                        <button
+                          onClick={(e) => {
+                            e.preventDefault();
+                            e.stopPropagation();
+                            setDeptToDelete(dept);
+                            setDeleteError(null);
+                            setDeleteConfirmOpen(true);
+                          }}
+                          className="p-1.5 text-slate-400 hover:text-rose-600 hover:bg-rose-50 rounded-lg transition-colors cursor-pointer"
+                          title="Delete Department Permanently"
+                        >
+                          <Trash2 className="w-4 h-4" />
+                        </button>
                       </div>
                     </div>
 
@@ -568,6 +607,74 @@ export default function DepartmentsPage() {
                 </button>
               </div>
             </form>
+          </div>
+        </div>
+      )}
+
+      {/* 8. PERMANENT DELETE CONFIRMATION DIALOG */}
+      {deleteConfirmOpen && deptToDelete && (
+        <div className="fixed inset-0 bg-slate-900/40 backdrop-blur-xs flex items-center justify-center p-4 z-50">
+          <div className="bg-white rounded-2xl max-w-lg w-full p-6 shadow-xl border border-rose-100 animate-in fade-in zoom-in-95 duration-100">
+            <div className="flex items-start gap-3.5 mb-4">
+              <div className="w-10 h-10 rounded-xl bg-rose-50 text-rose-600 flex items-center justify-center shrink-0">
+                <Trash2 className="w-5 h-5" />
+              </div>
+              <div className="flex-1 min-w-0">
+                <h3 className="text-lg font-bold text-slate-900">
+                  Delete Department: {deptToDelete.code}
+                </h3>
+                <p className="text-xs text-slate-500">
+                  {deptToDelete.name} ({deptToDelete.departmentId})
+                </p>
+              </div>
+            </div>
+
+            <div className="p-3.5 bg-amber-50/70 border border-amber-200/80 rounded-xl text-xs text-amber-900 mb-4 leading-relaxed">
+              <span className="font-bold">Permanent Operation Warning: </span>
+              Deleting a department removes it permanently from Firestore. If this department has registered faculty, subjects, class sections, teaching assignments, or published timetables, deletion will be blocked to preserve institutional integrity.
+            </div>
+
+            {deleteError && (
+              <div className="mb-4 p-3.5 bg-rose-50 border border-rose-200 rounded-xl text-xs text-rose-800 flex items-start gap-2.5">
+                <AlertTriangle className="w-4 h-4 text-rose-600 shrink-0 mt-0.5" />
+                <div className="flex-1 whitespace-pre-line leading-relaxed font-medium">
+                  {deleteError}
+                </div>
+              </div>
+            )}
+
+            <div className="flex justify-end gap-3 pt-3 border-t border-slate-100">
+              <button
+                type="button"
+                onClick={() => {
+                  setDeleteConfirmOpen(false);
+                  setDeptToDelete(null);
+                  setDeleteError(null);
+                }}
+                disabled={deleting}
+                className="px-4 py-2 text-xs sm:text-sm font-semibold text-slate-600 hover:bg-slate-100 rounded-xl transition-colors cursor-pointer"
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                onClick={handleDeleteDept}
+                disabled={deleting}
+                className="px-5 py-2 text-xs sm:text-sm font-bold text-white bg-rose-600 hover:bg-rose-700 disabled:opacity-50 disabled:cursor-not-allowed rounded-xl transition-colors cursor-pointer shadow-xs inline-flex items-center gap-1.5"
+              >
+                {deleting ? (
+                  <>
+                    <span className="inline-block w-3.5 h-3.5 border-2 border-white/30 border-t-white rounded-full animate-spin" />
+                    <span>Verifying & Deleting...</span>
+                  </>
+                ) : (
+                  <>
+                    <Trash2 className="w-3.5 h-3.5" />
+                    <span>Confirm Permanent Delete</span>
+                  </>
+                )}
+              </button>
+            </div>
           </div>
         </div>
       )}

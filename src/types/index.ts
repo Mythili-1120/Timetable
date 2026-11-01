@@ -48,6 +48,8 @@ export interface Staff {
   displayName: string;
   email: string;
   phone: string;
+  phoneNumber?: string; // Canonical alias for phone number
+  subjectIds?: string[]; // Canonical array of Subject Master IDs this faculty is eligible to teach
   designation: string;
   primaryDepartmentId: string;
   status: 'ACTIVE' | 'INACTIVE';
