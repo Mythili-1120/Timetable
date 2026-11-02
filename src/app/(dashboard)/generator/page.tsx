@@ -3,7 +3,7 @@
 import React, { useEffect, useState, useRef } from 'react';
 import Link from 'next/link';
 import { getAllDepartments, getCachedDepartments } from '../../../lib/services/departmentService';
-import { getAllClasses, getCachedClasses } from '../../../lib/services/classService';
+import { getAllClasses } from '../../../lib/services/classService';
 import {
   validateSubjectStaffForClass,
   SubjectStaffValidationResult
@@ -12,8 +12,6 @@ import { getAllSubjects, getCachedSubjects, getSemestersForYear } from '../../..
 import { getAllStaff, getCachedStaff } from '../../../lib/services/staffService';
 import { getCollegeSettings, getCachedCollegeSettings, DEFAULT_SETTINGS } from '../../../lib/services/settingsService';
 import {
-  saveDraft,
-  getDraft,
   publishTimetable,
   getGlobalBusySlots,
   getPublishedTimetables,
@@ -22,7 +20,6 @@ import {
 import {
   TimetableEngine,
   validateSlotSwap,
-  GenerationResult,
   computeTimetableFingerprint
 } from '../../../lib/engine/generator';
 import {
@@ -76,13 +73,9 @@ export default function GeneratorPage() {
   const initStaff = getCachedStaff();
   const initSettings = getCachedCollegeSettings();
   const initPub = getCachedPublishedTimetables('2025–2026') || [];
-  const firstDeptId = initDepts && initDepts.length > 0 ? initDepts[0].departmentId : '';
-  const initClasses = firstDeptId ? getCachedClasses(firstDeptId) || [] : [];
-
   const [departments, setDepartments] = useState<Department[]>(() => initDepts || []);
-  const [classes, setClasses] = useState<ClassSection[]>(() => initClasses);
+  const [classes, setClasses] = useState<ClassSection[]>([]);
   const [publishedTimetables, setPublishedTimetables] = useState<PublishedTimetable[]>(() => initPub);
-  const [draftStatusMap, setDraftStatusMap] = useState<Map<string, string>>(new Map());
 
   const [subjectsMap, setSubjectsMap] = useState<Map<string, Subject>>(() => {
     const sMap = new Map<string, Subject>();
@@ -97,7 +90,9 @@ export default function GeneratorPage() {
   const [settings, setSettings] = useState<CollegeSettings | null>(() => initSettings);
 
   // Form selections — Department -> Academic Year -> Section (Mandatory Hierarchy)
-  const [selectedDept, setSelectedDept] = useState(firstDeptId);
+  // Direct entry from Dashboard/Sidebar starts with no department selected.
+  // Explicit cohort parameters passed from Department entry flow configure the workspace.
+  const [selectedDept, setSelectedDept] = useState('');
   const [selectedYearOfStudy, setSelectedYearOfStudy] = useState<'1st Year' | '2nd Year' | '3rd Year' | '4th Year'>('1st Year');
   const [selectedClassId, setSelectedClassId] = useState('');
   const [selectedSemester, setSelectedSemester] = useState('ALL');
@@ -107,10 +102,13 @@ export default function GeneratorPage() {
   const [validation, setValidation] = useState<SubjectStaffValidationResult | null>(null);
   const [validating, setValidating] = useState(false);
 
-  // Generation context diversity history map (keyed by `${deptId}__${academicYear}__${classId}__${semester}`)
+  // Generation context diversity history map (in-memory only, keyed by `${deptId}__${academicYear}__${classId}__${semester}`)
   const generationHistoryMap = useRef<Map<string, { fingerprints: string[]; lastSeed: number }>>(new Map());
 
-  // Timetable Grid & Editor State
+  // Active generation session token for race condition cancellation & Clear actions
+  const activeSessionId = useRef(0);
+
+  // Timetable Grid & Editor State (Temporary In-Memory Preview until Lock & Publish)
   const [grid, setGrid] = useState<(TimetableSlot | null)[][]>([]);
   const [status, setStatus] = useState<'DRAFT' | 'GENERATED' | 'PUBLISHED'>('DRAFT');
   const [totalAllocated, setTotalAllocated] = useState(0);
@@ -123,7 +121,6 @@ export default function GeneratorPage() {
   const [swapError, setSwapError] = useState<string | null>(null);
   const [swapSuccess, setSwapSuccess] = useState<string | null>(null);
   const [previousGrid, setPreviousGrid] = useState<(TimetableSlot | null)[][] | null>(null);
-  const [isSavingDraft, setIsSavingDraft] = useState(false);
 
   // Publish / Lock Modal State (Workstream B8)
   const [publishModalOpen, setPublishModalOpen] = useState(false);
@@ -154,6 +151,10 @@ export default function GeneratorPage() {
 
   // Production-safe workspace reset action: purely UI state cleanup, strictly 0 Firestore deletes
   const handleConfirmClearSelection = () => {
+    // 1. Immediately invalidate any running generation or validation requests
+    activeSessionId.current++;
+
+    // 2. Clear all in-memory preview state
     setSelectedClassId('');
     setGrid([]);
     setSelectedSlot(null);
@@ -167,11 +168,12 @@ export default function GeneratorPage() {
     setPreviousGrid(null);
     setClearConfirmOpen(false);
 
-    // Clean URL query param without full page reload
+    // 3. Discard in-memory candidate history and diversity fingerprints
+    generationHistoryMap.current.clear();
+
+    // 4. Clean URL query parameters completely without full page reload
     if (typeof window !== 'undefined') {
-      const url = new URL(window.location.href);
-      url.searchParams.delete('classId');
-      window.history.replaceState(null, '', url.toString());
+      window.history.replaceState(null, '', window.location.pathname);
     }
 
     setClearSuccessFeedback(true);
@@ -208,15 +210,14 @@ export default function GeneratorPage() {
       staffList.forEach(st => stMap.set(st.memberId, st));
       setStaffMap(stMap);
 
-      const effectiveDept = paramDept || selectedDept || (depts.length > 0 ? depts[0].departmentId : '');
-      const effectiveYear = (paramYear && UNDERGRADUATE_YEARS.includes(paramYear)) ? paramYear : selectedYearOfStudy;
-
-      if (effectiveDept) setSelectedDept(effectiveDept);
-      if (effectiveYear) setSelectedYearOfStudy(effectiveYear);
       if (paramAcad) setAcademicYear(paramAcad);
 
-      if (effectiveDept) {
-        await loadDepartmentClasses(effectiveDept, paramClass, effectiveYear);
+      // Only enter cohort context if explicitly passed from Department entry flow
+      if (paramDept) {
+        setSelectedDept(paramDept);
+        const effectiveYear = (paramYear && UNDERGRADUATE_YEARS.includes(paramYear)) ? paramYear : '1st Year';
+        setSelectedYearOfStudy(effectiveYear);
+        await loadDepartmentClasses(paramDept, paramClass || undefined, effectiveYear);
       }
     }
     init();
@@ -232,34 +233,23 @@ export default function GeneratorPage() {
     if (reqId !== loadDeptRequestCounter.current) return;
     setClasses(cls);
 
-    // Sync draft states for all classes in this department
-    const dMap = new Map<string, string>();
-    await Promise.all(
-      cls.map(async c => {
-        const d = await getDraft(c.classId);
-        if (d && d.status) dMap.set(c.classId, d.status);
-      })
-    );
-    if (reqId !== loadDeptRequestCounter.current) return;
-    setDraftStatusMap(dMap);
-
     const activeYear = yearLevel || selectedYearOfStudy;
     // Filter to sections for the active year of study
     const yearSections = cls.filter(c => c.yearOfStudy === activeYear);
-    if (yearSections.length > 0) {
-      const preferred = targetClassId || selectedClassId;
-      const targetClass = yearSections.some(c => c.classId === preferred)
-        ? preferred
-        : yearSections[0].classId;
-      setSelectedClassId(targetClass);
-      await loadClassDraft(targetClass);
+
+    // If an explicit targetClassId was passed from Department entry flow:
+    if (targetClassId && yearSections.some(c => c.classId === targetClassId)) {
+      setSelectedClassId(targetClassId);
+      await loadClassTimetable(targetClassId);
     } else {
+      // NEVER auto-select a fallback section! Require explicit user selection
       setSelectedClassId('');
       setGrid([]);
+      setStatus('DRAFT');
     }
   };
 
-  const loadClassDraft = async (classId: string) => {
+  const loadClassTimetable = async (classId: string) => {
     if (!classId) {
       setGrid([]);
       setStatus('DRAFT');
@@ -269,8 +259,9 @@ export default function GeneratorPage() {
     setSelectedSlot(null);
     setSwapError(null);
     setSwapSuccess(null);
+    setPreviousGrid(null);
 
-    // Check if class is already published
+    // Check if class is already officially locked and published
     const published = publishedTimetables.find(p => p.classId === classId);
     if (published && published.grid) {
       setGrid(published.grid);
@@ -279,31 +270,12 @@ export default function GeneratorPage() {
       return;
     }
 
-    const draft = await getDraft(classId);
-    if (draft && draft.grid) {
-      setGrid(draft.grid);
-      setStatus(draft.status);
-      setTotalAllocated(draft.totalAllocated);
-
-      // Seed generation history for this context
-      const contextKey = `${selectedDept}__${academicYear}__${classId}__${selectedSemester}`;
-      const existingHist = generationHistoryMap.current.get(contextKey) || { fingerprints: [], lastSeed: 0 };
-      const fps = new Set(existingHist.fingerprints);
-      if (draft.generationMetadata?.fingerprint) {
-        fps.add(draft.generationMetadata.fingerprint);
-      }
-      if (draft.generationMetadata?.recentFingerprints) {
-        draft.generationMetadata.recentFingerprints.forEach(fp => fps.add(fp));
-      }
-      generationHistoryMap.current.set(contextKey, {
-        fingerprints: Array.from(fps).slice(-25),
-        lastSeed: Math.max(existingHist.lastSeed, draft.generationMetadata?.variantIndex || 0)
-      });
-    } else {
-      setGrid([]);
-      setStatus('DRAFT');
-      setTotalAllocated(0);
-    }
+    // STRICT PREVIEW-UNTIL-PUBLISH:
+    // Unpublished timetables are strictly temporary in-memory previews.
+    // NEVER query Firestore for drafts or restore old uncommitted schedules.
+    setGrid([]);
+    setStatus('DRAFT');
+    setTotalAllocated(0);
   };
 
   // Re-run canonical Subject-Staff readiness check whenever selected class or semester changes
@@ -353,53 +325,64 @@ export default function GeneratorPage() {
 
   // Handle department change — clears old section selection immediately to avoid stale state
   const handleDeptChange = async (deptId: string) => {
+    activeSessionId.current++;
     setSelectedDept(deptId);
     setSelectedClassId('');
     setGrid([]);
+    setPreviousGrid(null);
+    setSelectedSlot(null);
     setValidation(null);
-    await loadDepartmentClasses(deptId, undefined, selectedYearOfStudy);
+    setDiagnostics([]);
+    setSwapError(null);
+    setSwapSuccess(null);
+    if (deptId) {
+      await loadDepartmentClasses(deptId, undefined, selectedYearOfStudy);
+    } else {
+      setClasses([]);
+    }
   };
 
   // Handle year level change — clears old section selection immediately to avoid stale state
   const handleYearChange = async (year: '1st Year' | '2nd Year' | '3rd Year' | '4th Year') => {
-    const wasClassSelected = !!selectedClassId;
+    activeSessionId.current++;
     setSelectedYearOfStudy(year);
     setSelectedClassId('');
     setGrid([]);
+    setPreviousGrid(null);
+    setSelectedSlot(null);
     setValidation(null);
+    setDiagnostics([]);
+    setSwapError(null);
+    setSwapSuccess(null);
     const sems = getSemestersForYear(year);
     if (selectedSemester !== 'ALL' && !sems.some(s => s.name === selectedSemester)) {
       setSelectedSemester(sems[0].name);
-    }
-    const yearSections = classes.filter(c => c.yearOfStudy === year);
-    if (wasClassSelected && yearSections.length > 0) {
-      const firstSectionId = yearSections[0].classId;
-      setSelectedClassId(firstSectionId);
-      await loadClassDraft(firstSectionId);
-    } else {
-      setSelectedClassId('');
-      setGrid([]);
     }
   };
 
   // Handle section selection
   const handleClassChange = async (classId: string) => {
+    activeSessionId.current++;
     setSelectedClassId(classId);
-    await loadClassDraft(classId);
+    setValidation(null);
+    setDiagnostics([]);
+    await loadClassTimetable(classId);
   };
 
   // -----------------------------------------------------------------
   // BACKEND-ONLY DIVERSE CANDIDATE GENERATION & CONTINUOUS REGENERATION
+  // STRICT PREVIEW-UNTIL-PUBLISH (IN-MEMORY ONLY)
   // -----------------------------------------------------------------
   const handleRunGenerator = async () => {
     if (!selectedClassId || !settings || generating) return;
+    const currentSession = ++activeSessionId.current;
     setGenerating(true);
     setDiagnostics([]);
     setSwapError(null);
     setSwapSuccess(null);
     setSelectedSlot(null);
 
-    // Safe draft replacement: preserve current valid draft
+    // Safe in-memory replacement: preserve current valid preview if regeneration fails
     const currentValidGrid = grid.length > 0 ? grid : undefined;
 
     try {
@@ -411,6 +394,7 @@ export default function GeneratorPage() {
         selectedDept,
         selectedYearOfStudy
       );
+      if (currentSession !== activeSessionId.current) return;
       setValidation(valResult);
 
       if (!valResult.canGenerate) {
@@ -431,11 +415,12 @@ export default function GeneratorPage() {
 
       // 2. Fetch global college-wide busy slots (from all other classes)
       const globalBusy = await getGlobalBusySlots(academicYear, selectedClassId);
+      if (currentSession !== activeSessionId.current) return;
 
       const cls = classes.find(c => c.classId === selectedClassId);
       const classLabel = cls ? `${cls.yearOfStudy} - Section ${cls.section}` : selectedClassId;
 
-      // 3. Independent Context Management per Department + Academic Year + Section/Class + Semester
+      // 3. Independent In-Memory Context Management per Department + Academic Year + Section/Class + Semester
       const contextKey = `${selectedDept}__${academicYear}__${selectedClassId}__${selectedSemester}`;
       const hist = generationHistoryMap.current.get(contextKey) || { fingerprints: [], lastSeed: 0 };
       const seedOffset = hist.lastSeed + 1;
@@ -463,57 +448,35 @@ export default function GeneratorPage() {
         }
       );
 
+      if (currentSession !== activeSessionId.current) return;
+
       if (searchResult.success && searchResult.selectedCandidate) {
         const chosen = searchResult.selectedCandidate;
         const newFingerprint = searchResult.fingerprint || computeTimetableFingerprint(chosen.grid);
 
-        // Update history tracking for this exact section + semester
+        // Update in-memory history tracking for this exact section + semester
         const updatedFps = [...hist.fingerprints, newFingerprint].slice(-25);
         generationHistoryMap.current.set(contextKey, {
           fingerprints: updatedFps,
           lastSeed: seedOffset + (searchResult.totalExploredAttempts || 1)
         });
 
-        // 5. Safe Draft Replacement: Persist to Firestore first before updating the UI
-        if (user) {
-          await saveDraft(
-            {
-              classId: selectedClassId,
-              departmentId: selectedDept,
-              academicYear,
-              grid: chosen.grid,
-              totalAllocated: chosen.totalAllocated,
-              status: 'GENERATED',
-              updatedAt: new Date().toISOString(),
-              generationMetadata: {
-                variantIndex: chosen.variantIndex || 0,
-                qualityScore: chosen.qualityScore,
-                generatedAt: new Date().toISOString(),
-                semester: selectedSemester,
-                fingerprint: newFingerprint,
-                recentFingerprints: updatedFps,
-                regenerationCount: updatedFps.length
-              }
-            },
-            user.uid
-          );
-        }
-
-        // Update UI only after persistence succeeds
+        // 5. STRICT PREVIEW-UNTIL-PUBLISH:
+        // Update in-memory frontend state ONLY.
+        // Strictly ZERO Firestore writes prior to explicit Lock & Publish confirmation!
         setGrid(chosen.grid);
         setStatus('GENERATED');
         setTotalAllocated(chosen.totalAllocated);
         setTotalRequired(chosen.totalRequired);
         setDiagnostics([]);
-        setDraftStatusMap(prev => new Map(prev).set(selectedClassId, 'GENERATED'));
       } else {
         // Generation failed to produce a valid alternative
         if (currentValidGrid) {
-          // Preserve the current valid draft unchanged
+          // Preserve the current valid preview unchanged
           setDiagnostics(
             searchResult.diagnostics && searchResult.diagnostics.length > 0
               ? searchResult.diagnostics
-              : ['No alternative schedule satisfies all hard constraints without conflicting. Current draft retained.']
+              : ['No alternative schedule satisfies all hard constraints without conflicting. Current preview retained.']
           );
         } else {
           setDiagnostics(
@@ -522,16 +485,20 @@ export default function GeneratorPage() {
         }
       }
     } catch (err: any) {
+      if (currentSession !== activeSessionId.current) return;
       console.error('Generation error:', err);
-      // Keep previous valid draft intact on error
-      setDiagnostics([err.message || 'An error occurred during timetable generation. Current draft preserved.']);
+      // Keep previous valid preview intact on error
+      setDiagnostics([err.message || 'An error occurred during timetable generation. Current preview preserved.']);
     } finally {
-      setGenerating(false);
+      if (currentSession === activeSessionId.current) {
+        setGenerating(false);
+      }
     }
   };
 
   // -----------------------------------------------------------------
   // INTERACTIVE SLOT DRAG, SWAP & MOVE (Workstream B7)
+  // STRICT PREVIEW-UNTIL-PUBLISH (IN-MEMORY ONLY)
   // -----------------------------------------------------------------
   const handleExecuteSlotMoveOrSwap = async (
     source: { dayIdx: number; periodIdx: number },
@@ -576,7 +543,7 @@ export default function GeneratorPage() {
     const prevGrid = grid.map(row => [...row]);
     setPreviousGrid(prevGrid);
 
-    // Execute swap / move
+    // Execute swap / move purely in memory
     const nextGrid = grid.map(row => [...row]);
     const slotA = nextGrid[sourceDay][sourcePeriod];
     const slotB = nextGrid[targetDay][targetPeriod];
@@ -591,63 +558,17 @@ export default function GeneratorPage() {
     const actionDesc = slotB
       ? `Swapped ${slotA?.subjectCode || 'course'} with ${slotB.subjectCode}.`
       : `Moved ${slotA?.subjectCode || 'course'} to Day ${targetDay + 1}, Period ${targetPeriod + 1}.`;
-    setSwapSuccess(`${actionDesc} Draft auto-saved.`);
-
-    // Auto-save updated draft to Firestore
-    if (user) {
-      setIsSavingDraft(true);
-      try {
-        await saveDraft(
-          {
-            classId: selectedClassId,
-            departmentId: selectedDept,
-            academicYear,
-            grid: nextGrid,
-            totalAllocated,
-            status: 'DRAFT',
-            updatedAt: new Date().toISOString()
-          },
-          user.uid
-        );
-      } catch (err: any) {
-        console.error('Failed to save draft after move/swap:', err);
-        setGrid(prevGrid);
-        setPreviousGrid(null);
-        setSwapError('Failed to persist draft to cloud. Previous timetable restored.');
-        setSwapSuccess(null);
-      } finally {
-        setIsSavingDraft(false);
-      }
-    }
+    setSwapSuccess(`${actionDesc} Updated in temporary preview.`);
+    // Strictly ZERO Firestore writes: changes remain in temporary memory preview until published
   };
 
-  const handleUndoLastMove = async () => {
-    if (!previousGrid || !user || status === 'PUBLISHED') return;
-    const gridToRestore = previousGrid;
-    setGrid(gridToRestore);
+  const handleUndoLastMove = () => {
+    if (!previousGrid || status === 'PUBLISHED') return;
+    setGrid(previousGrid);
     setPreviousGrid(null);
     setSwapError(null);
-    setIsSavingDraft(true);
-    try {
-      await saveDraft(
-        {
-          classId: selectedClassId,
-          departmentId: selectedDept,
-          academicYear,
-          grid: gridToRestore,
-          totalAllocated,
-          status: 'DRAFT',
-          updatedAt: new Date().toISOString()
-        },
-        user.uid
-      );
-      setSwapSuccess('Reverted last move/swap. Previous timetable draft restored.');
-    } catch (err: any) {
-      console.error('Failed to save restored draft:', err);
-      setSwapError('Failed to save restored draft. Please refresh.');
-    } finally {
-      setIsSavingDraft(false);
-    }
+    setSwapSuccess('Reverted last move/swap. Previous preview restored.');
+    // Strictly ZERO Firestore writes
   };
 
   const handleSlotClick = async (dayIdx: number, periodIdx: number) => {
@@ -706,10 +627,9 @@ export default function GeneratorPage() {
       setPublishModalOpen(false);
       setPublishSuccess(true);
 
-      // Refresh published records and draft maps
+      // Refresh published records
       const pubList = await getPublishedTimetables(academicYear, true);
       setPublishedTimetables(pubList);
-      setDraftStatusMap(prev => new Map(prev).set(selectedClassId, 'PUBLISHED'));
     } catch (err: any) {
       console.error('Publish error:', err);
       alert(`Failed to publish timetable: ${err.message}`);
@@ -726,13 +646,12 @@ export default function GeneratorPage() {
   const getSectionStatus = (classId: string) => {
     const isLocked = publishedTimetables.some(p => p.classId === classId);
     if (isLocked) return 'LOCKED';
-    const dStatus = draftStatusMap.get(classId);
-    if (dStatus === 'GENERATED' || dStatus === 'DRAFT') return 'DRAFT';
+    if (classId === selectedClassId && grid.length > 0) return 'PREVIEW';
     return 'NOT_GENERATED';
   };
 
   const lockedYearCount = yearSections.filter(c => getSectionStatus(c.classId) === 'LOCKED').length;
-  const isYearFullyCompleted = yearSections.length > 0 && lockedYearCount === yearSections.length;
+  const isYearFullyCompleted = selectedDept !== '' && yearSections.length > 0 && lockedYearCount === yearSections.length;
 
   const teachingPeriods = settings?.periods?.filter(p => !p.isBreak) || [];
   const allPeriodsList = settings?.periods || DEFAULT_SETTINGS.periods;
@@ -788,6 +707,7 @@ export default function GeneratorPage() {
                 onChange={(e) => handleDeptChange(e.target.value)}
                 className="w-full appearance-none bg-white border border-slate-200/90 rounded-2xl px-4 py-2.5 pr-10 text-sm font-bold text-slate-800 shadow-xs focus:outline-none focus:ring-2 focus:ring-[#3431B7]/20 focus:border-[#3431B7] cursor-pointer"
               >
+                <option value="">Select a Department...</option>
                 {departments.map(d => (
                   <option key={d.departmentId} value={d.departmentId}>
                     {d.code} ({d.name})
@@ -885,11 +805,19 @@ export default function GeneratorPage() {
                           className={`inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-[11px] font-bold ${
                             sStatus === 'LOCKED'
                               ? 'bg-emerald-50 text-emerald-700 border border-emerald-200'
-                              : 'bg-amber-50 text-amber-700 border border-amber-200/80'
+                              : sStatus === 'PREVIEW'
+                              ? 'bg-indigo-50 text-[#3431B7] border border-indigo-200'
+                              : 'bg-slate-100 text-slate-600 border border-slate-200'
                           }`}
                         >
                           <span>●</span>
-                          <span>{sStatus === 'LOCKED' ? 'Locked' : 'Draft'}</span>
+                          <span>
+                            {sStatus === 'LOCKED'
+                              ? 'Locked'
+                              : sStatus === 'PREVIEW'
+                              ? 'Temporary Preview'
+                              : 'Not Generated'}
+                          </span>
                         </span>
                       )}
                     </div>
@@ -982,7 +910,7 @@ export default function GeneratorPage() {
             <div>
               <p className="font-bold text-white">Selection Cleared</p>
               <p className="text-slate-300 text-[11px]">
-                Exited current timetable workspace. You can now select another Academic Year, Section, or Semester. Saved drafts and published timetables remain safely stored.
+                Exited current timetable workspace. The temporary preview has been discarded. You can select another Academic Year and Section, or enter through Department Workspaces.
               </p>
             </div>
           </div>
@@ -1197,7 +1125,6 @@ export default function GeneratorPage() {
               <button
                 type="button"
                 onClick={handleUndoLastMove}
-                disabled={isSavingDraft}
                 className="px-2.5 py-1 text-xs font-bold text-emerald-800 bg-white hover:bg-emerald-100/70 border border-emerald-300 rounded-lg shadow-2xs transition-colors cursor-pointer flex items-center gap-1"
                 title="Undo last period move or swap"
               >
@@ -1226,10 +1153,16 @@ export default function GeneratorPage() {
                   className={`text-xs font-bold px-2.5 py-0.5 rounded-full ${
                     status === 'PUBLISHED'
                       ? 'bg-emerald-50 text-emerald-800 border border-emerald-200'
-                      : 'bg-amber-50 text-amber-700 border border-amber-200/80'
+                      : grid.length > 0
+                      ? 'bg-indigo-50 text-[#3431B7] border border-indigo-200'
+                      : 'bg-slate-100 text-slate-600 border border-slate-200'
                   }`}
                 >
-                  {status === 'PUBLISHED' ? 'Locked / Published' : 'Draft'}
+                  {status === 'PUBLISHED'
+                    ? 'Locked / Published'
+                    : grid.length > 0
+                    ? 'Temporary Preview'
+                    : 'Not Generated'}
                 </span>
               )}
             </div>
@@ -1237,19 +1170,15 @@ export default function GeneratorPage() {
               <Info className="w-3.5 h-3.5 text-slate-400 shrink-0" />
               <span>
                 {selectedClass
-                  ? 'Tap a period to swap or move it. Changes save automatically as drafts.'
+                  ? status === 'PUBLISHED'
+                    ? 'This timetable is locked and published to the authoritative institutional archive.'
+                    : 'Tap a period to swap or move it. Changes remain in temporary preview until published.'
                   : 'Select an Academic Year and Section above to generate or edit timetables.'}
               </span>
             </p>
           </div>
 
           <div className="flex items-center gap-5 flex-wrap sm:flex-nowrap justify-between sm:justify-end">
-            {isSavingDraft && (
-              <span className="text-[11px] font-semibold text-[#3431B7] flex items-center gap-1.5 animate-pulse bg-indigo-50 border border-indigo-200 px-2 py-1 rounded-lg">
-                <RotateCcw className="w-3 h-3 animate-spin text-[#3431B7]" />
-                <span>Saving draft...</span>
-              </span>
-            )}
 
             <div className="text-right">
               <div className="text-2xl font-black text-slate-900 leading-none">
@@ -1443,7 +1372,7 @@ export default function GeneratorPage() {
               <div className="p-3 bg-amber-50/80 border border-amber-200/90 rounded-xl text-amber-900 text-[11px] leading-relaxed flex items-start gap-2.5">
                 <AlertTriangle className="w-4 h-4 text-amber-600 shrink-0 mt-0.5" />
                 <div>
-                  <span className="font-bold">Unsaved local adjustments:</span> Any unsaved in-memory swaps or period moves in this session will be discarded.
+                  <span className="font-bold">Unpublished Preview Discard:</span> The current in-memory generated preview will be completely discarded. Generated timetables are only saved when explicitly locked and published.
                 </div>
               </div>
 
@@ -1451,7 +1380,7 @@ export default function GeneratorPage() {
               <div className="p-3 bg-emerald-50/80 border border-emerald-200/90 rounded-xl text-emerald-900 text-[11px] leading-relaxed flex items-start gap-2.5">
                 <ShieldCheck className="w-4 h-4 text-emerald-600 shrink-0 mt-0.5" />
                 <div>
-                  <span className="font-bold">Data Safety Guaranteed:</span> All saved drafts, locked timetables, and published institutional archives remain permanently stored in Firestore. No records will be deleted.
+                  <span className="font-bold">Data Safety Guaranteed:</span> All officially locked timetables and published institutional archives remain permanently stored in Firestore. No records will be deleted.
                 </div>
               </div>
             </div>

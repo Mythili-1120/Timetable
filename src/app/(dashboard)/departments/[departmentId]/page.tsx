@@ -2473,7 +2473,7 @@ export default function DepartmentDetailPage() {
                 onClick={() => {
                   setSetupModalOpen(false);
                   router.push(
-                    `/generator?departmentId=${departmentId}&classId=${encodeURIComponent(setupSelectedClassId)}&academicYear=2025–2026&yearOfStudy=${encodeURIComponent(setupSelectedYear)}&autoGenerate=true`
+                    `/generator?departmentId=${departmentId}&classId=${encodeURIComponent(setupSelectedClassId)}&academicYear=2025–2026&yearOfStudy=${encodeURIComponent(setupSelectedYear)}`
                   );
                 }}
                 className="inline-flex items-center gap-2 px-4 py-2 text-sm font-semibold text-white bg-[#3431B7] hover:bg-[#28229E] disabled:opacity-50 disabled:cursor-not-allowed rounded-lg transition-colors shadow-xs cursor-pointer"
