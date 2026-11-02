@@ -37,8 +37,45 @@ import {
   Phone,
   BookOpen,
   AlertTriangle,
-  Trash2
+  Trash2,
+  MoreHorizontal,
+  Info
 } from 'lucide-react';
+
+function getStaffAvatarLetters(staff: Staff): string {
+  if (staff.staffName && staff.initials) {
+    const firstChar = staff.staffName.trim().charAt(0).toUpperCase();
+    const initChar = staff.initials.trim().charAt(0).toUpperCase();
+    return `${firstChar}${initChar}`;
+  }
+  if (staff.displayName) {
+    const cleaned = staff.displayName.replace(/[()]/g, ' ').trim();
+    const parts = cleaned.split(/\s+/).filter(Boolean);
+    if (parts.length >= 2) {
+      return (parts[0][0] + parts[parts.length - 1][0]).toUpperCase();
+    }
+    return parts[0]?.slice(0, 2).toUpperCase() || 'ST';
+  }
+  return staff.staffName ? staff.staffName.slice(0, 2).toUpperCase() : 'ST';
+}
+
+function getStaffIssuesCount(member: Staff): number {
+  let issues = 0;
+  const phone = member.phoneNumber || member.phone;
+  if (!phone || !phone.trim()) {
+    issues += 1;
+  }
+  const subjects = Array.isArray(member.subjectIds) ? member.subjectIds : [];
+  if (subjects.length === 0) {
+    issues += 1;
+  }
+  if (!member.primaryDepartmentId) {
+    issues += 1;
+  }
+  return issues;
+}
+
+type TabFilter = 'ALL' | 'NEEDS_ATTENTION' | 'ACTIVE' | 'ARCHIVED';
 
 export default function StaffPage() {
   const initialStaff = getCachedStaff();
@@ -53,6 +90,8 @@ export default function StaffPage() {
   const [loading, setLoading] = useState(() => !initialStaff);
   const [search, setSearch] = useState('');
   const [deptFilter, setDeptFilter] = useState('ALL');
+  const [tabFilter, setTabFilter] = useState<TabFilter>('ALL');
+  const [openMenuId, setOpenMenuId] = useState<string | null>(null);
 
   // Modal states
   const [modalOpen, setModalOpen] = useState(false);
@@ -263,8 +302,14 @@ export default function StaffPage() {
 
   const activeCount = staffList.filter(s => s.status === 'ACTIVE').length;
   const archivedCount = staffList.length - activeCount;
+  const needsAttentionCount = staffList.filter(s => getStaffIssuesCount(s) > 0).length;
+  const totalCount = staffList.length;
 
   const filteredStaff = staffList.filter(s => {
+    if (tabFilter === 'ACTIVE' && s.status !== 'ACTIVE') return false;
+    if (tabFilter === 'ARCHIVED' && s.status === 'ACTIVE') return false;
+    if (tabFilter === 'NEEDS_ATTENTION' && getStaffIssuesCount(s) === 0) return false;
+
     const matchesSearch =
       s.staffName.toLowerCase().includes(search.toLowerCase()) ||
       s.memberId.toLowerCase().includes(search.toLowerCase()) ||
@@ -281,70 +326,124 @@ export default function StaffPage() {
 
   return (
     <div className="space-y-6">
-      {/* Header */}
-      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
-        <div>
-          <h1 className="text-2xl font-bold text-slate-900 tracking-tight">Staff Directory</h1>
-          <p className="text-sm text-slate-500">
-            College-wide faculty directory with subject qualifications and permanent Member IDs.
-          </p>
+      {/* Hero Header Banner */}
+      <div className="relative overflow-hidden rounded-3xl bg-[#3431B7] px-7 py-7 text-white shadow-lg shadow-indigo-950/10">
+        {/* Segmented dashed bars in top right (decorative as in template) */}
+        <div className="flex items-center justify-end gap-2 mb-2 opacity-35">
+          <div className="w-8 h-1 rounded-full bg-white" />
+          <div className="w-8 h-1 rounded-full bg-white" />
+          <div className="w-8 h-1 rounded-full bg-white" />
+          <div className="w-8 h-1 rounded-full bg-white" />
+          <div className="w-8 h-1 rounded-full bg-white" />
+          <div className="w-8 h-1 rounded-full bg-white" />
+          <div className="w-8 h-1 rounded-full bg-white" />
+          <div className="w-8 h-1 rounded-full bg-white" />
         </div>
-        <button
-          onClick={openAdd}
-          className="inline-flex items-center gap-2 px-4 py-2.5 rounded-lg text-sm font-semibold text-white bg-brand-600 hover:bg-brand-700 transition-colors shadow-xs cursor-pointer"
-        >
-          <Plus className="w-4 h-4" />
-          <span>Add Staff Member</span>
-        </button>
+
+        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-5">
+          <div>
+            <span className="text-xs font-semibold text-indigo-200 tracking-wide">
+              College-wide directory
+            </span>
+            <h1 className="text-3xl font-extrabold text-white tracking-tight mt-1">
+              Staff Directory
+            </h1>
+            <p className="text-sm text-indigo-100/90 mt-1 max-w-xl">
+              Faculty with their subject qualifications and permanent Member IDs.
+            </p>
+          </div>
+
+          <button
+            onClick={openAdd}
+            className="inline-flex items-center justify-center gap-2 px-5 py-2.5 rounded-xl text-sm font-bold text-[#3431B7] bg-white hover:bg-slate-50 transition-all shadow-md hover:shadow-lg cursor-pointer self-start sm:self-auto shrink-0"
+          >
+            <Plus className="w-4 h-4 stroke-[2.5]" />
+            <span>Add Staff Member</span>
+          </button>
+        </div>
       </div>
 
       {/* Metrics Bar */}
-      <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
-        <div className="bg-white p-4 rounded-xl border border-slate-200 shadow-xs flex items-center gap-3">
-          <div className="w-10 h-10 rounded-lg bg-blue-50 text-blue-600 flex items-center justify-center font-bold">
-            <Users className="w-5 h-5" />
+      <div className="bg-white rounded-2xl border border-slate-200/80 p-5 shadow-xs">
+        <div className="grid grid-cols-2 lg:grid-cols-4 gap-6 divide-y sm:divide-y-0 sm:divide-x divide-slate-100">
+          {/* Total registered */}
+          <div className="flex items-center gap-3.5 sm:px-2">
+            <div className="w-10 h-10 rounded-full bg-slate-50 text-slate-500 flex items-center justify-center shrink-0 border border-slate-100">
+              <Users className="w-5 h-5" />
+            </div>
+            <div>
+              <div className="text-2xl font-black text-slate-900 leading-none">
+                {totalCount}
+              </div>
+              <div className="text-xs font-semibold text-slate-400 mt-1">
+                Total registered
+              </div>
+            </div>
           </div>
-          <div>
-            <p className="text-xs font-semibold text-slate-500 uppercase tracking-wider">Total Registered</p>
-            <p className="text-xl font-bold text-slate-900">{staffList.length}</p>
+
+          {/* Active faculty */}
+          <div className="flex items-center gap-3.5 sm:px-4 pt-4 sm:pt-0">
+            <div className="w-10 h-10 rounded-full bg-emerald-50 text-emerald-600 flex items-center justify-center shrink-0 border border-emerald-100/60">
+              <CheckCircle2 className="w-5 h-5" />
+            </div>
+            <div>
+              <div className="text-2xl font-black text-slate-900 leading-none">
+                {activeCount}
+              </div>
+              <div className="text-xs font-semibold text-slate-400 mt-1">
+                Active faculty
+              </div>
+            </div>
           </div>
-        </div>
-        <div className="bg-white p-4 rounded-xl border border-slate-200 shadow-xs flex items-center gap-3">
-          <div className="w-10 h-10 rounded-lg bg-emerald-50 text-emerald-600 flex items-center justify-center font-bold">
-            <CheckCircle2 className="w-5 h-5" />
+
+          {/* Archived / Inactive */}
+          <div className="flex items-center gap-3.5 sm:px-4 pt-4 sm:pt-0">
+            <div className="w-10 h-10 rounded-full bg-slate-50 text-slate-400 flex items-center justify-center shrink-0 border border-slate-100">
+              <Archive className="w-5 h-5" />
+            </div>
+            <div>
+              <div className="text-2xl font-black text-slate-900 leading-none">
+                {archivedCount}
+              </div>
+              <div className="text-xs font-semibold text-slate-400 mt-1">
+                Archived / Inactive
+              </div>
+            </div>
           </div>
-          <div>
-            <p className="text-xs font-semibold text-slate-500 uppercase tracking-wider">Active Faculty</p>
-            <p className="text-xl font-bold text-emerald-700">{activeCount}</p>
-          </div>
-        </div>
-        <div className="bg-white p-4 rounded-xl border border-slate-200 shadow-xs flex items-center gap-3">
-          <div className="w-10 h-10 rounded-lg bg-slate-100 text-slate-600 flex items-center justify-center font-bold">
-            <Archive className="w-5 h-5" />
-          </div>
-          <div>
-            <p className="text-xs font-semibold text-slate-500 uppercase tracking-wider">Archived / Inactive</p>
-            <p className="text-xl font-bold text-slate-700">{archivedCount}</p>
+
+          {/* Need attention */}
+          <div className="flex items-center gap-3.5 sm:px-4 pt-4 sm:pt-0">
+            <div className="w-10 h-10 rounded-full bg-amber-50 text-amber-500 flex items-center justify-center shrink-0 border border-amber-100/60">
+              <AlertTriangle className="w-5 h-5" />
+            </div>
+            <div>
+              <div className="text-2xl font-black text-slate-900 leading-none">
+                {needsAttentionCount}
+              </div>
+              <div className="text-xs font-semibold text-slate-400 mt-1">
+                Need attention
+              </div>
+            </div>
           </div>
         </div>
       </div>
 
       {/* Filter and Search Bar */}
-      <div className="flex flex-col sm:flex-row gap-3">
-        <div className="relative flex-1">
-          <Search className="w-4 h-4 absolute left-3 top-3 text-slate-400" />
+      <div className="flex flex-col sm:flex-row items-center gap-3">
+        <div className="relative flex-1 w-full">
+          <Search className="w-4 h-4 absolute left-4 top-3.5 text-slate-400" />
           <input
             type="text"
             placeholder="Search by Member ID, Name, Phone, or Department..."
             value={search}
             onChange={(e) => setSearch(e.target.value)}
-            className="w-full pl-9 pr-4 py-2 text-sm border border-slate-300 rounded-lg bg-white focus:outline-none focus:ring-2 focus:ring-brand-500"
+            className="w-full pl-11 pr-4 py-3 text-sm bg-white border border-slate-200/90 rounded-2xl placeholder-slate-400 text-slate-800 focus:outline-none focus:ring-2 focus:ring-[#3431B7]/15 focus:border-[#3431B7] shadow-xs transition-all"
           />
         </div>
         <select
           value={deptFilter}
           onChange={(e) => setDeptFilter(e.target.value)}
-          className="px-3 py-2 text-sm border border-slate-300 rounded-lg bg-white text-slate-700 focus:outline-none focus:ring-2 focus:ring-brand-500"
+          className="w-full sm:w-auto px-4 py-3 text-sm bg-white border border-slate-200/90 rounded-2xl text-slate-700 font-semibold focus:outline-none focus:ring-2 focus:ring-[#3431B7]/15 focus:border-[#3431B7] shadow-xs cursor-pointer min-w-[200px]"
         >
           <option value="ALL">All Departments</option>
           {departments.map(d => (
@@ -355,134 +454,290 @@ export default function StaffPage() {
         </select>
       </div>
 
-      {/* Staff Table */}
-      <div className="bg-white rounded-xl border border-slate-200 overflow-hidden shadow-xs">
-        <div className="overflow-x-auto">
-          <table className="w-full text-left text-sm">
-            <thead className="bg-slate-50 text-slate-600 text-xs font-semibold uppercase tracking-wider border-b border-slate-200">
-              <tr>
-                <th className="py-3.5 px-4">Permanent ID</th>
-                <th className="py-3.5 px-4">Faculty Name</th>
-                <th className="py-3.5 px-4">Phone Number</th>
-                <th className="py-3.5 px-4">Department</th>
-                <th className="py-3.5 px-4">Qualified Subjects</th>
-                <th className="py-3.5 px-4">Designation</th>
-                <th className="py-3.5 px-4">Status</th>
-                <th className="py-3.5 px-4 text-right">Actions</th>
-              </tr>
-            </thead>
-            <tbody className="divide-y divide-slate-100">
-              {filteredStaff.map((member) => {
-                const linkedDepts = (staffDeptMap.get(member.memberId) || []).filter(
-                  dId => dId !== member.primaryDepartmentId
-                );
-                const displayPhone = member.phoneNumber || member.phone || '';
-                const memberSubjs = Array.isArray(member.subjectIds) ? member.subjectIds : [];
+      {/* Filter Segment Tabs */}
+      <div className="flex flex-wrap items-center gap-2">
+        <button
+          onClick={() => setTabFilter('ALL')}
+          className={`px-4 py-2 rounded-xl text-xs font-bold transition-all cursor-pointer ${
+            tabFilter === 'ALL'
+              ? 'bg-[#3431B7] text-white shadow-xs'
+              : 'bg-white hover:bg-slate-50 text-slate-600 border border-slate-200/90 shadow-xs'
+          }`}
+        >
+          All {totalCount}
+        </button>
+        <button
+          onClick={() => setTabFilter('NEEDS_ATTENTION')}
+          className={`px-4 py-2 rounded-xl text-xs font-bold transition-all cursor-pointer ${
+            tabFilter === 'NEEDS_ATTENTION'
+              ? 'bg-[#3431B7] text-white shadow-xs'
+              : 'bg-white hover:bg-slate-50 text-slate-600 border border-slate-200/90 shadow-xs'
+          }`}
+        >
+          Needs attention {needsAttentionCount}
+        </button>
+        <button
+          onClick={() => setTabFilter('ACTIVE')}
+          className={`px-4 py-2 rounded-xl text-xs font-bold transition-all cursor-pointer ${
+            tabFilter === 'ACTIVE'
+              ? 'bg-[#3431B7] text-white shadow-xs'
+              : 'bg-white hover:bg-slate-50 text-slate-600 border border-slate-200/90 shadow-xs'
+          }`}
+        >
+          Active {activeCount}
+        </button>
+        <button
+          onClick={() => setTabFilter('ARCHIVED')}
+          className={`px-4 py-2 rounded-xl text-xs font-bold transition-all cursor-pointer ${
+            tabFilter === 'ARCHIVED'
+              ? 'bg-[#3431B7] text-white shadow-xs'
+              : 'bg-white hover:bg-slate-50 text-slate-600 border border-slate-200/90 shadow-xs'
+          }`}
+        >
+          Archived {archivedCount}
+        </button>
+      </div>
 
-                return (
-                  <tr key={member.memberId} className="hover:bg-slate-50/60 transition-colors">
-                    <td className="py-3 px-4 font-mono text-xs font-bold text-brand-700 bg-brand-50/40 w-32 whitespace-nowrap">
-                      {member.memberId}
-                    </td>
-                    <td className="py-3 px-4 font-semibold text-slate-900 whitespace-nowrap">
-                      {member.displayName}
-                    </td>
-                    <td className="py-3 px-4 text-xs font-mono text-slate-700 whitespace-nowrap">
-                      {displayPhone ? (
-                        <span className="inline-flex items-center gap-1.5 text-slate-800">
-                          <Phone className="w-3 h-3 text-slate-400" />
-                          <span>{displayPhone}</span>
+      {/* Faculty Cards List */}
+      <div className="space-y-3.5">
+        {filteredStaff.length === 0 ? (
+          <div className="bg-white rounded-2xl border border-slate-200 p-8 text-center shadow-xs">
+            <div className="w-12 h-12 rounded-full bg-slate-100 text-slate-400 mx-auto flex items-center justify-center mb-3">
+              <Users className="w-6 h-6" />
+            </div>
+            <h3 className="text-base font-bold text-slate-900">No staff members found</h3>
+            <p className="text-xs text-slate-500 mt-1 max-w-sm mx-auto">
+              No faculty match your current filter or search criteria.
+            </p>
+            {(search || deptFilter !== 'ALL' || tabFilter !== 'ALL') && (
+              <button
+                onClick={() => { setSearch(''); setDeptFilter('ALL'); setTabFilter('ALL'); }}
+                className="mt-3.5 px-4 py-1.5 rounded-xl text-xs font-semibold text-[#3431B7] bg-indigo-50 hover:bg-indigo-100 transition-colors cursor-pointer"
+              >
+                Reset Filters
+              </button>
+            )}
+          </div>
+        ) : (
+          filteredStaff.map((member) => {
+            const avatarLetters = getStaffAvatarLetters(member);
+            const issuesCount = getStaffIssuesCount(member);
+            const linkedDepts = (staffDeptMap.get(member.memberId) || []).filter(
+              dId => dId !== member.primaryDepartmentId
+            );
+            const displayPhone = member.phoneNumber || member.phone || '';
+            const memberSubjs = Array.isArray(member.subjectIds) ? member.subjectIds : [];
+
+            const primaryDeptObj = departments.find(
+              d => normalizeDeptId(d.departmentId) === normalizeDeptId(member.primaryDepartmentId)
+            );
+            const primaryDeptName = primaryDeptObj?.code || primaryDeptObj?.name || member.primaryDepartmentId || 'General';
+
+            return (
+              <div
+                key={member.memberId}
+                className="bg-white rounded-2xl border border-slate-200/80 p-5 shadow-xs hover:border-slate-300 transition-all flex flex-col xl:flex-row xl:items-center justify-between gap-4"
+              >
+                {/* Identity Section: Avatar + Name + ID + Designation + Status */}
+                <div className="flex items-center gap-4 min-w-[280px]">
+                  <div className="w-14 h-14 rounded-2xl bg-[#3431B7] text-white flex items-center justify-center font-bold text-lg tracking-wide shrink-0 shadow-xs">
+                    {avatarLetters}
+                  </div>
+                  <div className="min-w-0 flex-1">
+                    <div className="flex items-center gap-2 flex-wrap">
+                      <h3 className="font-bold text-slate-900 text-base sm:text-lg leading-snug">
+                        {member.displayName || member.staffName}
+                      </h3>
+                      <span className="font-mono text-xs font-semibold px-2.5 py-0.5 rounded-full bg-indigo-50 text-[#3431B7] border border-indigo-100">
+                        {member.memberId}
+                      </span>
+                    </div>
+                    <p className="text-xs text-slate-500 font-medium mt-0.5">
+                      {member.designation || 'Faculty Member'}
+                    </p>
+                    <div className="flex items-center gap-2 mt-2">
+                      <span
+                        className={`inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full text-[11px] font-bold ${
+                          member.status === 'ACTIVE'
+                            ? 'bg-emerald-50 text-emerald-700 border border-emerald-200/60'
+                            : 'bg-slate-100 text-slate-600 border border-slate-200'
+                        }`}
+                      >
+                        <span
+                          className={`w-1.5 h-1.5 rounded-full ${
+                            member.status === 'ACTIVE' ? 'bg-emerald-500' : 'bg-slate-400'
+                          }`}
+                        />
+                        <span>{member.status === 'ACTIVE' ? 'ACTIVE' : 'INACTIVE'}</span>
+                      </span>
+                      {issuesCount > 0 && (
+                        <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-[11px] font-bold bg-amber-50 text-amber-700 border border-amber-200/60">
+                          <AlertTriangle className="w-3 h-3 text-amber-600" />
+                          <span>{issuesCount} to fix</span>
                         </span>
-                      ) : (
-                        <span className="text-slate-400 italic">Not set</span>
                       )}
-                    </td>
-                    <td className="py-3 px-4 text-slate-800 text-xs font-medium">
-                      <span>
-                        {departments.find(d => normalizeDeptId(d.departmentId) === normalizeDeptId(member.primaryDepartmentId))?.name ||
-                         departments.find(d => normalizeDeptId(d.departmentId) === normalizeDeptId(member.primaryDepartmentId))?.code ||
-                         member.primaryDepartmentId}
+                    </div>
+                  </div>
+                </div>
+
+                {/* Metadata Section: Department, Phone, Qualified Subjects */}
+                <div className="grid grid-cols-1 sm:grid-cols-3 gap-4 xl:gap-8 flex-1 xl:px-6">
+                  {/* DEPARTMENT */}
+                  <div>
+                    <span className="block text-[11px] font-bold text-slate-400 uppercase tracking-wider mb-1.5">
+                      DEPARTMENT
+                    </span>
+                    <div className="flex items-center gap-1.5 flex-wrap">
+                      <span className="inline-block bg-indigo-50/70 text-[#3431B7] border border-indigo-100/90 px-3 py-1 rounded-full text-xs font-bold">
+                        {primaryDeptName}
                       </span>
                       {linkedDepts.length > 0 && (
-                        <span className="text-slate-500 text-[11px] ml-1">
+                        <span className="text-[11px] text-slate-400 font-medium">
                           (+{linkedDepts.map(dId => departments.find(d => normalizeDeptId(d.departmentId) === normalizeDeptId(dId))?.code || dId.replace('dept-', '').toUpperCase()).join(', ')})
                         </span>
                       )}
-                    </td>
-                    <td className="py-3 px-4 text-slate-700 text-xs">
-                      {memberSubjs.length > 0 ? (
-                        <span>
-                          {memberSubjs.map((sId, idx) => {
-                            const subj = subjectMap.get(sId);
-                            const label = subj ? subj.name : sId;
-                            return (
-                              <React.Fragment key={sId}>
-                                {idx > 0 && <span className="text-slate-400 mx-1">•</span>}
-                                <span title={subj ? `${subj.code} (${subj.type}, ${subj.weeklyHours}h/wk)` : sId}>
-                                  {label}
-                                </span>
-                              </React.Fragment>
-                            );
-                          })}
-                        </span>
-                      ) : (
-                        <span className="text-slate-400 italic text-[11px]">No subjects linked</span>
-                      )}
-                    </td>
-                    <td className="py-3 px-4 text-slate-600 text-xs whitespace-nowrap">{member.designation}</td>
-                    <td className="py-3 px-4 whitespace-nowrap">
-                      <span
-                        className={`inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full text-xs font-semibold ${
-                          member.status === 'ACTIVE'
-                            ? 'bg-emerald-50 text-emerald-700 border border-emerald-200'
-                            : 'bg-slate-100 text-slate-500 border border-slate-200'
-                        }`}
-                      >
-                        {member.status === 'ACTIVE' ? <CheckCircle2 className="w-3 h-3" /> : <XCircle className="w-3 h-3" />}
-                        {member.status}
+                    </div>
+                  </div>
+
+                  {/* PHONE */}
+                  <div>
+                    <span className="block text-[11px] font-bold text-slate-400 uppercase tracking-wider mb-1.5">
+                      PHONE
+                    </span>
+                    {displayPhone ? (
+                      <span className="text-xs font-mono font-medium text-slate-700">
+                        {displayPhone}
                       </span>
-                    </td>
-                    <td className="py-3 px-4 text-right space-x-1.5 whitespace-nowrap">
-                      <button
-                        onClick={() => { setSelectedStaffForLink(member); setLinkModalOpen(true); }}
-                        className="p-1.5 text-slate-500 hover:text-indigo-600 hover:bg-indigo-50 rounded-md transition-colors cursor-pointer"
-                        title="Link to Another Department"
-                      >
-                        <LinkIcon className="w-4 h-4" />
-                      </button>
-                      <button
-                        onClick={() => openEdit(member)}
-                        className="p-1.5 text-slate-500 hover:text-brand-600 hover:bg-brand-50 rounded-md transition-colors cursor-pointer"
-                        title="Edit Staff Member"
-                      >
-                        <Edit2 className="w-4 h-4" />
-                      </button>
-                      <button
-                        onClick={() => handleToggleStatus(member)}
-                        className="p-1.5 text-slate-500 hover:text-amber-600 hover:bg-amber-50 rounded-md transition-colors cursor-pointer"
-                        title={member.status === 'ACTIVE' ? 'Deactivate Staff (Soft-Archive)' : 'Reactivate Staff'}
-                      >
-                        <Archive className="w-4 h-4" />
-                      </button>
-                      <button
-                        onClick={() => {
-                          setStaffToDelete(member);
-                          setDeleteError(null);
-                          setDeleteConfirmOpen(true);
-                        }}
-                        className="p-1.5 text-slate-500 hover:text-rose-600 hover:bg-rose-50 rounded-md transition-colors cursor-pointer"
-                        title="Delete Staff Member Permanently"
-                      >
-                        <Trash2 className="w-4 h-4" />
-                      </button>
-                    </td>
-                  </tr>
-                );
-              })}
-            </tbody>
-          </table>
+                    ) : (
+                      <div className="text-xs text-slate-400 flex items-center gap-1">
+                        <span>Not set</span>
+                        <button
+                          onClick={() => openEdit(member)}
+                          className="text-[#3431B7] font-semibold hover:underline cursor-pointer"
+                        >
+                          + Add
+                        </button>
+                      </div>
+                    )}
+                  </div>
+
+                  {/* QUALIFIED SUBJECTS */}
+                  <div>
+                    <span className="block text-[11px] font-bold text-slate-400 uppercase tracking-wider mb-1.5">
+                      QUALIFIED SUBJECTS
+                    </span>
+                    {memberSubjs.length > 0 ? (
+                      <div className="flex items-center gap-1.5 flex-wrap">
+                        {memberSubjs.map((sId) => {
+                          const subj = subjectMap.get(sId);
+                          return (
+                            <span
+                              key={sId}
+                              title={subj ? `${subj.code} (${subj.type}, ${subj.weeklyHours}h/wk)` : sId}
+                              className="inline-block bg-indigo-50 text-[#3431B7] border border-indigo-100 px-3 py-1 rounded-full text-xs font-semibold"
+                            >
+                              {subj ? subj.name : sId}
+                            </span>
+                          );
+                        })}
+                      </div>
+                    ) : (
+                      <span className="inline-block bg-amber-50 text-amber-800 border border-amber-200/80 px-3 py-1 rounded-full text-xs font-semibold">
+                        No subjects linked
+                      </span>
+                    )}
+                  </div>
+                </div>
+
+                {/* Action Buttons Section */}
+                <div className="flex items-center gap-2 justify-end shrink-0 pt-3 xl:pt-0 border-t xl:border-t-0 border-slate-100">
+                  <button
+                    onClick={() => {
+                      setSelectedStaffForLink(member);
+                      setLinkModalOpen(true);
+                    }}
+                    className="inline-flex items-center gap-1.5 px-3.5 py-2 rounded-xl text-xs font-semibold text-white bg-[#3431B7] hover:bg-[#2B299E] transition-colors shadow-xs cursor-pointer"
+                    title="Link Staff to Another Department"
+                  >
+                    <LinkIcon className="w-3.5 h-3.5" />
+                    <span>Link</span>
+                  </button>
+                  <button
+                    onClick={() => openEdit(member)}
+                    className="inline-flex items-center gap-1.5 px-3.5 py-2 rounded-xl text-xs font-semibold text-slate-700 bg-white hover:bg-slate-50 border border-slate-200 transition-colors shadow-xs cursor-pointer"
+                    title="Edit Staff Member"
+                  >
+                    <Edit2 className="w-3.5 h-3.5 text-slate-500" />
+                    <span>Edit</span>
+                  </button>
+                  <div className="relative">
+                    <button
+                      onClick={() => setOpenMenuId(openMenuId === member.memberId ? null : member.memberId)}
+                      className="p-2 rounded-xl text-slate-400 hover:text-slate-600 bg-white hover:bg-slate-50 border border-slate-200 transition-colors shadow-xs cursor-pointer"
+                      title="More actions"
+                    >
+                      <MoreHorizontal className="w-4 h-4" />
+                    </button>
+
+                    {openMenuId === member.memberId && (
+                      <>
+                        <div
+                          className="fixed inset-0 z-20"
+                          onClick={() => setOpenMenuId(null)}
+                        />
+                        <div className="absolute right-0 top-full mt-1.5 w-48 bg-white rounded-xl shadow-lg border border-slate-200 py-1.5 z-30 animate-in fade-in zoom-in-95 duration-100 text-xs">
+                          <button
+                            onClick={() => {
+                              setOpenMenuId(null);
+                              handleToggleStatus(member);
+                            }}
+                            className="w-full text-left px-3 py-2 text-slate-700 hover:bg-slate-50 flex items-center gap-2 cursor-pointer font-medium"
+                          >
+                            <Archive className="w-3.5 h-3.5 text-slate-400" />
+                            <span>{member.status === 'ACTIVE' ? 'Deactivate (Archive)' : 'Reactivate Faculty'}</span>
+                          </button>
+                          <button
+                            onClick={() => {
+                              setOpenMenuId(null);
+                              setStaffToDelete(member);
+                              setDeleteError(null);
+                              setDeleteConfirmOpen(true);
+                            }}
+                            className="w-full text-left px-3 py-2 text-rose-600 hover:bg-rose-50 flex items-center gap-2 cursor-pointer font-medium"
+                          >
+                            <Trash2 className="w-3.5 h-3.5 text-rose-500" />
+                            <span>Delete Permanently</span>
+                          </button>
+                        </div>
+                      </>
+                    )}
+                  </div>
+                </div>
+              </div>
+            );
+          })
+        )}
+      </div>
+
+      {/* Bottom Tip Banner */}
+      <div className="bg-indigo-50/70 border border-indigo-100/90 rounded-2xl p-4 flex items-center gap-3.5">
+        <div className="w-7 h-7 rounded-full bg-[#3431B7] text-white flex items-center justify-center font-bold text-xs shrink-0 shadow-xs">
+          <Info className="w-4 h-4" />
+        </div>
+        <div>
+          <h4 className="text-xs font-bold text-slate-900">
+            Tip: link at least one qualified subject to every faculty member
+          </h4>
+          <p className="text-xs text-indigo-900/80 mt-0.5">
+            The timetable generator can only use faculty who have subjects linked.
+          </p>
         </div>
       </div>
+
+      {/* Footer Counter */}
+      <p className="text-xs text-slate-400 font-medium pl-1">
+        Showing {filteredStaff.length} of {staffList.length} staff members
+      </p>
 
       {/* Add / Edit Staff Modal */}
       {modalOpen && (

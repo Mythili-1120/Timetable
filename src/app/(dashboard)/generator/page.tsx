@@ -10,7 +10,7 @@ import {
 } from '../../../lib/services/assignmentService';
 import { getAllSubjects, getCachedSubjects, getSemestersForYear } from '../../../lib/services/subjectService';
 import { getAllStaff, getCachedStaff } from '../../../lib/services/staffService';
-import { getCollegeSettings, getCachedCollegeSettings } from '../../../lib/services/settingsService';
+import { getCollegeSettings, getCachedCollegeSettings, DEFAULT_SETTINGS } from '../../../lib/services/settingsService';
 import {
   saveDraft,
   getDraft,
@@ -19,7 +19,12 @@ import {
   getPublishedTimetables,
   getCachedPublishedTimetables
 } from '../../../lib/services/timetableService';
-import { TimetableEngine, validateSlotSwap, GenerationResult } from '../../../lib/engine/generator';
+import {
+  TimetableEngine,
+  validateSlotSwap,
+  GenerationResult,
+  computeTimetableFingerprint
+} from '../../../lib/engine/generator';
 import {
   Department,
   ClassSection,
@@ -51,7 +56,9 @@ import {
   X,
   History,
   Building2,
-  ExternalLink
+  ExternalLink,
+  ChevronDown,
+  Info
 } from 'lucide-react';
 
 const UNDERGRADUATE_YEARS: ('1st Year' | '2nd Year' | '3rd Year' | '4th Year')[] = [
@@ -98,10 +105,8 @@ export default function GeneratorPage() {
   const [validation, setValidation] = useState<SubjectStaffValidationResult | null>(null);
   const [validating, setValidating] = useState(false);
 
-  // Multi-candidate variants state (Workstream B4)
-  const [candidates, setCandidates] = useState<GenerationResult[]>([]);
-  const [activeCandidateIndex, setActiveCandidateIndex] = useState(0);
-  const [candidateScore, setCandidateScore] = useState<number>(0);
+  // Generation context diversity history map (keyed by `${deptId}__${academicYear}__${classId}__${semester}`)
+  const generationHistoryMap = useRef<Map<string, { fingerprints: string[]; lastSeed: number }>>(new Map());
 
   // Timetable Grid & Editor State
   const [grid, setGrid] = useState<(TimetableSlot | null)[][]>([]);
@@ -115,6 +120,8 @@ export default function GeneratorPage() {
   const [selectedSlot, setSelectedSlot] = useState<{ dayIdx: number; periodIdx: number } | null>(null);
   const [swapError, setSwapError] = useState<string | null>(null);
   const [swapSuccess, setSwapSuccess] = useState<string | null>(null);
+  const [previousGrid, setPreviousGrid] = useState<(TimetableSlot | null)[][] | null>(null);
+  const [isSavingDraft, setIsSavingDraft] = useState(false);
 
   // Publish / Lock Modal State (Workstream B8)
   const [publishModalOpen, setPublishModalOpen] = useState(false);
@@ -223,7 +230,6 @@ export default function GeneratorPage() {
       setGrid(published.grid);
       setStatus('PUBLISHED');
       setTotalAllocated(published.totalHours);
-      setCandidateScore(95);
       return;
     }
 
@@ -232,12 +238,25 @@ export default function GeneratorPage() {
       setGrid(draft.grid);
       setStatus(draft.status);
       setTotalAllocated(draft.totalAllocated);
-      setCandidateScore(draft.generationMetadata?.qualityScore || 88);
+
+      // Seed generation history for this context
+      const contextKey = `${selectedDept}__${academicYear}__${classId}__${selectedSemester}`;
+      const existingHist = generationHistoryMap.current.get(contextKey) || { fingerprints: [], lastSeed: 0 };
+      const fps = new Set(existingHist.fingerprints);
+      if (draft.generationMetadata?.fingerprint) {
+        fps.add(draft.generationMetadata.fingerprint);
+      }
+      if (draft.generationMetadata?.recentFingerprints) {
+        draft.generationMetadata.recentFingerprints.forEach(fp => fps.add(fp));
+      }
+      generationHistoryMap.current.set(contextKey, {
+        fingerprints: Array.from(fps).slice(-25),
+        lastSeed: Math.max(existingHist.lastSeed, draft.generationMetadata?.variantIndex || 0)
+      });
     } else {
       setGrid([]);
       setStatus('DRAFT');
       setTotalAllocated(0);
-      setCandidateScore(0);
     }
   };
 
@@ -323,15 +342,18 @@ export default function GeneratorPage() {
   };
 
   // -----------------------------------------------------------------
-  // GENERATION ENGINE EXECUTION (Workstream B3 & B4: Multiple Candidates)
+  // BACKEND-ONLY DIVERSE CANDIDATE GENERATION & CONTINUOUS REGENERATION
   // -----------------------------------------------------------------
   const handleRunGenerator = async () => {
-    if (!selectedClassId || !settings) return;
+    if (!selectedClassId || !settings || generating) return;
     setGenerating(true);
     setDiagnostics([]);
     setSwapError(null);
     setSwapSuccess(null);
     setSelectedSlot(null);
+
+    // Safe draft replacement: preserve current valid draft
+    const currentValidGrid = grid.length > 0 ? grid : undefined;
 
     try {
       // 1. Authoritative Pre-Generation Subject & Staff Validation with Department & Cohort Scope Check
@@ -366,8 +388,14 @@ export default function GeneratorPage() {
       const cls = classes.find(c => c.classId === selectedClassId);
       const classLabel = cls ? `${cls.yearOfStudy} - Section ${cls.section}` : selectedClassId;
 
-      // 3. Multi-candidate diversity search (generates up to ~10 unique candidates)
-      const { candidates: generatedCandidates, bestCandidate } = TimetableEngine.generateDiverseCandidates(
+      // 3. Independent Context Management per Department + Academic Year + Section/Class + Semester
+      const contextKey = `${selectedDept}__${academicYear}__${selectedClassId}__${selectedSemester}`;
+      const hist = generationHistoryMap.current.get(contextKey) || { fingerprints: [], lastSeed: 0 };
+      const seedOffset = hist.lastSeed + 1;
+
+      // 4. Bounded Backend-Only Candidate Generation & Diversity Selection
+      // Explores up to 100 candidate attempts internally without sending the collection to client
+      const searchResult = TimetableEngine.generateDiverseAlternative(
         {
           classId: selectedClassId,
           classLabel,
@@ -379,95 +407,202 @@ export default function GeneratorPage() {
           collegeSettings: settings,
           globalBusySlots: globalBusy
         },
-        10,
-        grid.length > 0 ? grid : undefined
+        {
+          maxSearchAttempts: 100, // Search target: explore up to 100 candidate attempts
+          maxTimeMs: 3000, // 3-second bounded compute budget to guarantee responsive UI
+          currentGrid: currentValidGrid,
+          previousFingerprints: hist.fingerprints,
+          seedOffset
+        }
       );
 
-      if (bestCandidate && bestCandidate.success) {
-        setCandidates(generatedCandidates);
-        setActiveCandidateIndex(0);
-        setGrid(bestCandidate.grid);
-        setStatus('GENERATED');
-        setTotalAllocated(bestCandidate.totalAllocated);
-        setTotalRequired(bestCandidate.totalRequired);
-        setCandidateScore(bestCandidate.qualityScore || 90);
-        setDiagnostics([]);
+      if (searchResult.success && searchResult.selectedCandidate) {
+        const chosen = searchResult.selectedCandidate;
+        const newFingerprint = searchResult.fingerprint || computeTimetableFingerprint(chosen.grid);
 
-        // Auto-save generated candidate state as DRAFT in Firestore
+        // Update history tracking for this exact section + semester
+        const updatedFps = [...hist.fingerprints, newFingerprint].slice(-25);
+        generationHistoryMap.current.set(contextKey, {
+          fingerprints: updatedFps,
+          lastSeed: seedOffset + (searchResult.totalExploredAttempts || 1)
+        });
+
+        // 5. Safe Draft Replacement: Persist to Firestore first before updating the UI
         if (user) {
           await saveDraft(
             {
               classId: selectedClassId,
               departmentId: selectedDept,
               academicYear,
-              grid: bestCandidate.grid,
-              totalAllocated: bestCandidate.totalAllocated,
+              grid: chosen.grid,
+              totalAllocated: chosen.totalAllocated,
               status: 'GENERATED',
               updatedAt: new Date().toISOString(),
               generationMetadata: {
-                variantIndex: bestCandidate.variantIndex || 0,
-                totalCandidates: generatedCandidates.length,
-                qualityScore: bestCandidate.qualityScore,
-                generatedAt: new Date().toISOString()
+                variantIndex: chosen.variantIndex || 0,
+                qualityScore: chosen.qualityScore,
+                generatedAt: new Date().toISOString(),
+                semester: selectedSemester,
+                fingerprint: newFingerprint,
+                recentFingerprints: updatedFps,
+                regenerationCount: updatedFps.length
               }
             },
             user.uid
           );
         }
 
-        // Update local draft status map
+        // Update UI only after persistence succeeds
+        setGrid(chosen.grid);
+        setStatus('GENERATED');
+        setTotalAllocated(chosen.totalAllocated);
+        setTotalRequired(chosen.totalRequired);
+        setDiagnostics([]);
         setDraftStatusMap(prev => new Map(prev).set(selectedClassId, 'GENERATED'));
       } else {
-        setDiagnostics(
-          bestCandidate?.diagnostics || ['Constraint satisfaction failure: Unable to place all required curriculum hours.']
-        );
+        // Generation failed to produce a valid alternative
+        if (currentValidGrid) {
+          // Preserve the current valid draft unchanged
+          setDiagnostics(
+            searchResult.diagnostics && searchResult.diagnostics.length > 0
+              ? searchResult.diagnostics
+              : ['No alternative schedule satisfies all hard constraints without conflicting. Current draft retained.']
+          );
+        } else {
+          setDiagnostics(
+            searchResult.diagnostics || ['Constraint satisfaction failure: Unable to place all required curriculum hours without collisions.']
+          );
+        }
       }
     } catch (err: any) {
       console.error('Generation error:', err);
-      setDiagnostics([err.message || 'An error occurred during timetable generation.']);
+      // Keep previous valid draft intact on error
+      setDiagnostics([err.message || 'An error occurred during timetable generation. Current draft preserved.']);
     } finally {
       setGenerating(false);
     }
   };
 
-  // Switch between generated candidate variants (Workstream B4)
-  const handleSelectCandidate = async (index: number) => {
-    if (!candidates[index] || !candidates[index].success) return;
-    const chosen = candidates[index];
-    setActiveCandidateIndex(index);
-    setGrid(chosen.grid);
-    setTotalAllocated(chosen.totalAllocated);
-    setCandidateScore(chosen.qualityScore || 85);
+  // -----------------------------------------------------------------
+  // INTERACTIVE SLOT DRAG, SWAP & MOVE (Workstream B7)
+  // -----------------------------------------------------------------
+  const handleExecuteSlotMoveOrSwap = async (
+    source: { dayIdx: number; periodIdx: number },
+    target: { dayIdx: number; periodIdx: number }
+  ) => {
+    if (status === 'PUBLISHED') {
+      alert('This timetable is locked and published. To modify, create a new version.');
+      return;
+    }
+
+    if (source.dayIdx === target.dayIdx && source.periodIdx === target.periodIdx) {
+      setSelectedSlot(null);
+      return;
+    }
+
+    const sourceDay = source.dayIdx;
+    const sourcePeriod = source.periodIdx;
+    const targetDay = target.dayIdx;
+    const targetPeriod = target.periodIdx;
+
+    const globalBusy = await getGlobalBusySlots(academicYear, selectedClassId);
+
+    const validationResult = validateSlotSwap(
+      grid,
+      sourceDay,
+      sourcePeriod,
+      targetDay,
+      targetPeriod,
+      globalBusy,
+      selectedClassId,
+      days.length,
+      teachingPeriods.length
+    );
+
+    if (!validationResult.valid) {
+      setSwapError(validationResult.reason || 'Invalid move or swap operation.');
+      setSelectedSlot(null);
+      return;
+    }
+
+    // Save previous snapshot for Undo
+    const prevGrid = grid.map(row => [...row]);
+    setPreviousGrid(prevGrid);
+
+    // Execute swap / move
+    const nextGrid = grid.map(row => [...row]);
+    const slotA = nextGrid[sourceDay][sourcePeriod];
+    const slotB = nextGrid[targetDay][targetPeriod];
+
+    nextGrid[sourceDay][sourcePeriod] = slotB ? { ...slotB, dayIdx: sourceDay, periodIdx: sourcePeriod } : null;
+    nextGrid[targetDay][targetPeriod] = slotA ? { ...slotA, dayIdx: targetDay, periodIdx: targetPeriod } : null;
+
+    setGrid(nextGrid);
     setSelectedSlot(null);
     setSwapError(null);
-    setSwapSuccess(null);
 
-    // Persist switched candidate as current working draft
-    if (user && selectedClassId) {
+    const actionDesc = slotB
+      ? `Swapped ${slotA?.subjectCode || 'course'} with ${slotB.subjectCode}.`
+      : `Moved ${slotA?.subjectCode || 'course'} to Day ${targetDay + 1}, Period ${targetPeriod + 1}.`;
+    setSwapSuccess(`${actionDesc} Draft auto-saved.`);
+
+    // Auto-save updated draft to Firestore
+    if (user) {
+      setIsSavingDraft(true);
+      try {
+        await saveDraft(
+          {
+            classId: selectedClassId,
+            departmentId: selectedDept,
+            academicYear,
+            grid: nextGrid,
+            totalAllocated,
+            status: 'DRAFT',
+            updatedAt: new Date().toISOString()
+          },
+          user.uid
+        );
+      } catch (err: any) {
+        console.error('Failed to save draft after move/swap:', err);
+        setGrid(prevGrid);
+        setPreviousGrid(null);
+        setSwapError('Failed to persist draft to cloud. Previous timetable restored.');
+        setSwapSuccess(null);
+      } finally {
+        setIsSavingDraft(false);
+      }
+    }
+  };
+
+  const handleUndoLastMove = async () => {
+    if (!previousGrid || !user || status === 'PUBLISHED') return;
+    const gridToRestore = previousGrid;
+    setGrid(gridToRestore);
+    setPreviousGrid(null);
+    setSwapError(null);
+    setIsSavingDraft(true);
+    try {
       await saveDraft(
         {
           classId: selectedClassId,
           departmentId: selectedDept,
           academicYear,
-          grid: chosen.grid,
-          totalAllocated: chosen.totalAllocated,
-          status: 'GENERATED',
-          updatedAt: new Date().toISOString(),
-          generationMetadata: {
-            variantIndex: chosen.variantIndex || index,
-            totalCandidates: candidates.length,
-            qualityScore: chosen.qualityScore,
-            generatedAt: new Date().toISOString()
-          }
+          grid: gridToRestore,
+          totalAllocated,
+          status: 'DRAFT',
+          updatedAt: new Date().toISOString()
         },
         user.uid
       );
+      setSwapSuccess('Reverted last move/swap. Previous timetable draft restored.');
+    } catch (err: any) {
+      console.error('Failed to save restored draft:', err);
+      setSwapError('Failed to save restored draft. Please refresh.');
+    } finally {
+      setIsSavingDraft(false);
     }
   };
 
-  // -----------------------------------------------------------------
-  // INTERACTIVE SLOT SWAPPING & MOVING (Workstream B7)
-  // -----------------------------------------------------------------
   const handleSlotClick = async (dayIdx: number, periodIdx: number) => {
     if (status === 'PUBLISHED') {
       alert('This timetable is locked and published. To modify, create a new version.');
@@ -494,59 +629,7 @@ export default function GeneratorPage() {
     }
 
     // Second click: attempt swap / move
-    const sourceDay = selectedSlot.dayIdx;
-    const sourcePeriod = selectedSlot.periodIdx;
-    const targetDay = dayIdx;
-    const targetPeriod = periodIdx;
-
-    const globalBusy = await getGlobalBusySlots(academicYear, selectedClassId);
-
-    const validationResult = validateSlotSwap(
-      grid,
-      sourceDay,
-      sourcePeriod,
-      targetDay,
-      targetPeriod,
-      globalBusy,
-      selectedClassId,
-      days.length,
-      teachingPeriods.length
-    );
-
-    if (!validationResult.valid) {
-      setSwapError(validationResult.reason || 'Invalid swap operation.');
-      setSelectedSlot(null);
-      return;
-    }
-
-    // Execute swap
-    const nextGrid = grid.map(row => [...row]);
-    const slotA = nextGrid[sourceDay][sourcePeriod];
-    const slotB = nextGrid[targetDay][targetPeriod];
-
-    nextGrid[sourceDay][sourcePeriod] = slotB ? { ...slotB, dayIdx: sourceDay, periodIdx: sourcePeriod } : null;
-    nextGrid[targetDay][targetPeriod] = slotA ? { ...slotA, dayIdx: targetDay, periodIdx: targetPeriod } : null;
-
-    setGrid(nextGrid);
-    setSelectedSlot(null);
-    setSwapError(null);
-    setSwapSuccess(`Moved ${slotA?.subjectCode || 'course'} to Day ${targetDay + 1}, Period ${targetPeriod + 1}. Draft saved.`);
-
-    // Auto-save updated draft to Firestore
-    if (user) {
-      await saveDraft(
-        {
-          classId: selectedClassId,
-          departmentId: selectedDept,
-          academicYear,
-          grid: nextGrid,
-          totalAllocated,
-          status: 'DRAFT',
-          updatedAt: new Date().toISOString()
-        },
-        user.uid
-      );
-    }
+    await handleExecuteSlotMoveOrSwap(selectedSlot, { dayIdx, periodIdx });
   };
 
   // -----------------------------------------------------------------
@@ -605,105 +688,100 @@ export default function GeneratorPage() {
   const isYearFullyCompleted = yearSections.length > 0 && lockedYearCount === yearSections.length;
 
   const teachingPeriods = settings?.periods?.filter(p => !p.isBreak) || [];
-  const days = settings?.workingDays || ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
+  const allPeriodsList = settings?.periods || DEFAULT_SETTINGS.periods;
+  const days = settings?.workingDays && settings.workingDays.length > 0
+    ? settings.workingDays
+    : ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
 
   return (
     <div className="space-y-6">
-      {/* 1. TOP HEADER & WORKFLOW CONTEXT */}
-      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
-        <div>
-          <div className="flex items-center gap-2 mb-1">
-            <Link
-              href={selectedDept ? `/departments/${selectedDept}` : '/departments'}
-              className="text-xs font-semibold text-slate-500 hover:text-[#3431B7] inline-flex items-center gap-1"
-            >
-              <span>{selectedDeptObj?.name || 'Department'}</span>
-              <ChevronRight className="w-3.5 h-3.5" />
-            </Link>
-            <span className="text-xs font-bold text-[#3431B7]">Timetable Generator</span>
-          </div>
-          <h1 className="text-2xl font-extrabold text-slate-900 tracking-tight">
-            Section-wise Timetable Generator
-          </h1>
-          <p className="text-xs text-slate-500">
-            Generate, preview, adjust, and lock conflict-free timetables per Academic Year & Section
-          </p>
+      {/* 1. HERO HEADER BANNER */}
+      <div className="relative overflow-hidden rounded-3xl bg-[#3431B7] px-7 py-7 text-white shadow-lg shadow-indigo-950/10">
+        {/* Segmented dashed bars in top right (decorative as in template) */}
+        <div className="flex items-center justify-end gap-2 mb-2 opacity-35">
+          <div className="w-8 h-1 rounded-full bg-white" />
+          <div className="w-8 h-1 rounded-full bg-white" />
+          <div className="w-8 h-1 rounded-full bg-white" />
+          <div className="w-8 h-1 rounded-full bg-white" />
+          <div className="w-8 h-1 rounded-full bg-white" />
+          <div className="w-8 h-1 rounded-full bg-white" />
+          <div className="w-8 h-1 rounded-full bg-white" />
+          <div className="w-8 h-1 rounded-full bg-white" />
         </div>
 
-        <div className="flex items-center gap-2">
-          {grid.length > 0 && status !== 'PUBLISHED' && (
-            <button
-              onClick={() => setPublishModalOpen(true)}
-              disabled={publishing || totalAllocated === 0}
-              className="inline-flex items-center gap-2 px-4 py-2.5 rounded-xl text-xs font-bold text-white bg-emerald-600 hover:bg-emerald-700 transition-colors shadow-xs cursor-pointer disabled:opacity-50"
-            >
-              <Lock className="w-4 h-4" />
-              <span>Lock & Publish Timetable</span>
-            </button>
-          )}
-
-          {status === 'PUBLISHED' && (
-            <div className="inline-flex items-center gap-1.5 px-3 py-2 rounded-xl text-xs font-bold bg-emerald-50 text-emerald-800 border border-emerald-200">
-              <CheckCircle2 className="w-4 h-4 text-emerald-600" />
-              <span>Timetable Locked & Published</span>
-            </div>
-          )}
-
-          <button
-            onClick={handleRunGenerator}
-            disabled={generating || !selectedClassId || (validation !== null && !validation.canGenerate)}
-            className="inline-flex items-center gap-2 px-4 py-2.5 rounded-xl text-xs font-bold text-white bg-[#3431B7] hover:bg-[#28229E] transition-colors shadow-xs cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed"
-          >
-            <Cpu className="w-4 h-4" />
-            <span>{generating ? 'Solving Constraints...' : grid.length > 0 ? 'Regenerate Candidates' : 'Generate Timetable'}</span>
-          </button>
+        <div>
+          <span className="text-xs font-semibold text-indigo-200 tracking-wide">
+            Timetable studio
+          </span>
+          <h1 className="text-3xl font-extrabold text-white tracking-tight mt-1">
+            Section-wise Timetable Generator
+          </h1>
+          <p className="text-sm text-indigo-100/90 mt-1 max-w-xl">
+            Generate, preview, adjust and lock conflict-free timetables for each academic year and section.
+          </p>
         </div>
       </div>
 
-      {/* 2. THREE-TIER SELECTION BAR (Department -> Academic Year -> Section) */}
-      <div className="bg-white rounded-2xl border border-[#E3E5F0] p-5 shadow-xs space-y-4">
-        <div className="grid grid-cols-1 md:grid-cols-3 gap-4 items-center">
+      {/* 2. THREE-TIER SELECTION PANEL (Department -> Academic Year -> Section) */}
+      <div className="bg-white rounded-2xl border border-slate-200/80 p-5 shadow-xs space-y-4">
+        <div className="grid grid-cols-1 lg:grid-cols-3 gap-6 items-start">
           {/* Tier 1: Department Selector */}
           <div>
-            <label className="block text-xs font-bold uppercase tracking-wider text-slate-600 mb-1.5">
-              1. Department
-            </label>
-            <select
-              value={selectedDept}
-              onChange={(e) => handleDeptChange(e.target.value)}
-              className="w-full px-3 py-2 text-sm border border-slate-300 rounded-xl bg-white font-semibold text-slate-900 focus:outline-none focus:ring-2 focus:ring-[#3431B7]"
-            >
-              {departments.map(d => (
-                <option key={d.departmentId} value={d.departmentId}>
-                  {d.name} ({d.code})
-                </option>
-              ))}
-            </select>
+            <div className="flex items-center gap-2 mb-2">
+              <span className="w-5 h-5 rounded-full bg-[#3431B7] text-white text-[11px] font-bold flex items-center justify-center shrink-0">
+                1
+              </span>
+              <span className="text-[11px] font-bold text-slate-500 uppercase tracking-wider">
+                DEPARTMENT
+              </span>
+            </div>
+            <div className="relative">
+              <select
+                value={selectedDept}
+                onChange={(e) => handleDeptChange(e.target.value)}
+                className="w-full appearance-none bg-white border border-slate-200/90 rounded-2xl px-4 py-2.5 pr-10 text-sm font-bold text-slate-800 shadow-xs focus:outline-none focus:ring-2 focus:ring-[#3431B7]/20 focus:border-[#3431B7] cursor-pointer"
+              >
+                {departments.map(d => (
+                  <option key={d.departmentId} value={d.departmentId}>
+                    {d.code} ({d.name})
+                  </option>
+                ))}
+              </select>
+              <ChevronDown className="w-4 h-4 text-slate-400 absolute right-3.5 top-3.5 pointer-events-none" />
+            </div>
           </div>
 
           {/* Tier 2: Academic Year Level (1st, 2nd, 3rd, 4th) */}
           <div>
-            <label className="block text-xs font-bold uppercase tracking-wider text-slate-600 mb-1.5">
-              2. Academic Year Cohort
-            </label>
-            <div className="grid grid-cols-4 gap-1 p-1 bg-slate-100 rounded-xl">
+            <div className="flex items-center gap-2 mb-2">
+              <span className="w-5 h-5 rounded-full bg-[#3431B7] text-white text-[11px] font-bold flex items-center justify-center shrink-0">
+                2
+              </span>
+              <span className="text-[11px] font-bold text-slate-500 uppercase tracking-wider">
+                ACADEMIC YEAR
+              </span>
+            </div>
+            <div className="grid grid-cols-4 gap-1 p-1 bg-slate-100/80 rounded-2xl border border-slate-200/60">
               {UNDERGRADUATE_YEARS.map(yr => {
                 const isSelected = selectedYearOfStudy === yr;
                 const count = classes.filter(c => c.yearOfStudy === yr).length;
+                const shortLabel = yr.replace(' Year', '');
 
                 return (
                   <button
                     key={yr}
                     type="button"
                     onClick={() => handleYearChange(yr)}
-                    className={`py-1.5 text-xs font-bold rounded-lg transition-all cursor-pointer ${
+                    className={`py-1.5 px-1 rounded-xl text-center transition-all cursor-pointer ${
                       isSelected
-                        ? 'bg-white text-[#3431B7] shadow-xs'
-                        : 'text-slate-600 hover:text-slate-900'
+                        ? 'bg-white text-[#3431B7] font-bold shadow-xs border border-slate-200/60'
+                        : 'text-slate-500 hover:text-slate-800'
                     }`}
                   >
-                    <span>{yr.replace(' Year', '')}</span>
-                    <span className="block text-[10px] font-normal text-slate-400">({count} sec)</span>
+                    <div className="text-xs font-bold leading-tight">{shortLabel}</div>
+                    <div className={`text-[10px] leading-tight ${isSelected ? 'text-slate-500' : 'text-slate-400'}`}>
+                      {count} {count === 1 ? 'section' : 'sections'}
+                    </div>
                   </button>
                 );
               })}
@@ -712,64 +790,89 @@ export default function GeneratorPage() {
 
           {/* Tier 3: Section Selector */}
           <div>
-            <label className="block text-xs font-bold uppercase tracking-wider text-slate-600 mb-1.5">
-              3. Section ({selectedYearOfStudy})
-            </label>
+            <div className="flex items-center gap-2 mb-2">
+              <span className="w-5 h-5 rounded-full bg-[#3431B7] text-white text-[11px] font-bold flex items-center justify-center shrink-0">
+                3
+              </span>
+              <span className="text-[11px] font-bold text-slate-500 uppercase tracking-wider">
+                SECTION ({selectedYearOfStudy.toUpperCase()})
+              </span>
+            </div>
             {yearSections.length === 0 ? (
-              <div className="px-3 py-2 text-xs text-amber-700 bg-amber-50 rounded-xl border border-amber-200">
+              <div className="px-3 py-2 text-xs text-amber-700 bg-amber-50 rounded-2xl border border-amber-200">
                 No sections configured for {selectedYearOfStudy}.
               </div>
             ) : (
-              <select
-                value={selectedClassId}
-                onChange={(e) => handleClassChange(e.target.value)}
-                className="w-full px-3 py-2 text-sm border border-slate-300 rounded-xl bg-white font-bold text-slate-900 focus:outline-none focus:ring-2 focus:ring-[#3431B7]"
-              >
+              <div className="flex items-center gap-2 flex-wrap">
                 {yearSections.map(cls => {
+                  const isSelected = cls.classId === selectedClassId;
                   const sStatus = getSectionStatus(cls.classId);
-                  const label = sStatus === 'LOCKED' ? '🔒 Locked' : sStatus === 'DRAFT' ? '📝 Draft' : '⏳ Not Generated';
                   return (
-                    <option key={cls.classId} value={cls.classId}>
-                      Section {cls.section} — {label}
-                    </option>
+                    <div key={cls.classId} className="flex items-center gap-2">
+                      <button
+                        type="button"
+                        onClick={() => handleClassChange(cls.classId)}
+                        className={`px-4 py-2 rounded-xl text-xs font-bold transition-all cursor-pointer ${
+                          isSelected
+                            ? 'bg-[#3431B7] text-white shadow-xs'
+                            : 'bg-white hover:bg-slate-50 text-slate-700 border border-slate-200/90 shadow-xs'
+                        }`}
+                      >
+                        Section {cls.section}
+                      </button>
+                      {isSelected && (
+                        <span
+                          className={`inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-[11px] font-bold ${
+                            sStatus === 'LOCKED'
+                              ? 'bg-emerald-50 text-emerald-700 border border-emerald-200'
+                              : 'bg-amber-50 text-amber-700 border border-amber-200/80'
+                          }`}
+                        >
+                          <span>●</span>
+                          <span>{sStatus === 'LOCKED' ? 'Locked' : 'Draft'}</span>
+                        </span>
+                      )}
+                    </div>
                   );
                 })}
-              </select>
+              </div>
             )}
           </div>
         </div>
 
-        {/* Academic Year Completion Status Strip (Workstream B9 & B10) */}
-        <div className="pt-3 border-t border-slate-100 flex flex-col sm:flex-row sm:items-center justify-between gap-2 text-xs">
-          <div className="flex items-center gap-2">
-            <span className="font-bold text-slate-700">{selectedYearOfStudy} Progress:</span>
-            <span
-              className={`font-extrabold px-2 py-0.5 rounded-full text-[11px] ${
-                isYearFullyCompleted
-                  ? 'bg-emerald-100 text-emerald-800 border border-emerald-200'
-                  : lockedYearCount > 0
-                  ? 'bg-amber-100 text-amber-800 border border-amber-200'
-                  : 'bg-slate-100 text-slate-600 border border-slate-200'
-              }`}
-            >
-              {isYearFullyCompleted
-                ? `Completed (${lockedYearCount} of ${yearSections.length} Sections Locked)`
-                : lockedYearCount > 0
-                ? `In Progress (${lockedYearCount} of ${yearSections.length} Sections Locked)`
-                : `Not Started (0 of ${yearSections.length} Sections Locked)`}
+        {/* Sub-bar: Year Progress + Semester Tabs */}
+        <div className="pt-3 border-t border-slate-100 flex flex-col sm:flex-row sm:items-center justify-between gap-3 text-xs">
+          <div className="flex items-center gap-3">
+            <span className="font-bold text-slate-700 whitespace-nowrap">
+              {selectedYearOfStudy} progress
+            </span>
+            <div className="w-24 sm:w-32 h-2 rounded-full bg-slate-100 overflow-hidden">
+              <div
+                className="h-full bg-[#3431B7] rounded-full transition-all duration-300"
+                style={{
+                  width: yearSections.length > 0 ? `${(lockedYearCount / yearSections.length) * 100}%` : '0%'
+                }}
+              />
+            </div>
+            <span className="text-[11px] text-slate-500 font-medium whitespace-nowrap">
+              {lockedYearCount === 0
+                ? `Not started • 0 of ${yearSections.length} sections locked`
+                : lockedYearCount === yearSections.length
+                ? `Completed • ${lockedYearCount} of ${yearSections.length} sections locked`
+                : `In progress • ${lockedYearCount} of ${yearSections.length} sections locked`}
             </span>
           </div>
 
-          <div className="flex items-center gap-4 text-slate-500 text-[11px] flex-wrap">
-            <div className="flex items-center gap-1.5">
-              <span className="font-bold text-slate-700">Semester:</span>
+          <div className="flex items-center gap-2">
+            <span className="font-bold text-slate-700">Semester</span>
+            <div className="flex items-center gap-1">
               <button
                 type="button"
                 onClick={() => setSelectedSemester('ALL')}
-                className={`px-2 py-0.5 rounded text-xs font-bold transition-all cursor-pointer ${
+                className={`px-3 py-1 rounded-xl text-xs font-bold transition-all cursor-pointer ${
                   selectedSemester === 'ALL'
-                    ? 'bg-[#3431B7] text-white shadow-2xs'
-                    : 'bg-slate-100 text-slate-600 hover:bg-slate-200'
+                    ? 'bg-[#3431B7] text-white shadow-xs'
+                    : 'text-slate-500 hover:text-slate-800'
                 }`}
               >
                 All
@@ -779,17 +882,16 @@ export default function GeneratorPage() {
                   key={sem.name}
                   type="button"
                   onClick={() => setSelectedSemester(sem.name)}
-                  className={`px-2 py-0.5 rounded text-xs font-bold transition-all cursor-pointer ${
+                  className={`px-3 py-1 rounded-xl text-xs font-bold transition-all cursor-pointer ${
                     selectedSemester === sem.name
-                      ? 'bg-[#3431B7] text-white shadow-2xs'
-                      : 'bg-slate-100 text-slate-600 hover:bg-slate-200'
+                      ? 'bg-[#3431B7] text-white shadow-xs'
+                      : 'text-slate-500 hover:text-slate-800'
                   }`}
                 >
                   {sem.name}
                 </button>
               ))}
             </div>
-            <span>Academic Year: <strong className="text-slate-800">{academicYear}</strong></span>
           </div>
         </div>
       </div>
@@ -955,48 +1057,6 @@ export default function GeneratorPage() {
         </div>
       )}
 
-      {/* 5. MULTI-CANDIDATE VARIANT SWITCHER BAR (Workstream B4) */}
-      {candidates.length > 1 && status !== 'PUBLISHED' && (
-        <div className="bg-white rounded-2xl border border-[#E3E5F0] p-4 shadow-xs">
-          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 mb-2">
-            <div>
-              <span className="text-xs font-extrabold text-slate-900">
-                Generated Solution Variants ({candidates.length} Candidate Schedules)
-              </span>
-              <p className="text-[11px] text-slate-500">
-                Explore meaningfully different valid arrangements with verified constraint satisfaction
-              </p>
-            </div>
-            <div className="text-xs text-[#3431B7] font-bold">
-              Current Quality Score: {candidateScore}/100
-            </div>
-          </div>
-
-          <div className="flex items-center gap-2 overflow-x-auto pb-1">
-            {candidates.map((cand, idx) => {
-              const isSelected = activeCandidateIndex === idx;
-              return (
-                <button
-                  key={idx}
-                  type="button"
-                  onClick={() => handleSelectCandidate(idx)}
-                  className={`px-3 py-1.5 rounded-xl text-xs font-bold transition-all cursor-pointer shrink-0 ${
-                    isSelected
-                      ? 'bg-[#3431B7] text-white shadow-xs'
-                      : 'bg-slate-100 text-slate-700 hover:bg-slate-200'
-                  }`}
-                >
-                  Candidate {idx + 1}
-                  <span className={`text-[10px] ml-1.5 font-normal ${isSelected ? 'text-white/80' : 'text-slate-500'}`}>
-                    ({cand.qualityScore || 85} pts)
-                  </span>
-                </button>
-              );
-            })}
-          </div>
-        </div>
-      )}
-
       {/* 6. SWAP & MOVE NOTIFICATION BANNERS (Workstream B7) */}
       {selectedSlot && (
         <div className="p-3 bg-indigo-50 border border-indigo-200 rounded-xl text-xs text-indigo-900 flex items-center justify-between">
@@ -1028,49 +1088,98 @@ export default function GeneratorPage() {
       )}
 
       {swapSuccess && (
-        <div className="p-3 bg-emerald-50 border border-emerald-200 rounded-xl text-xs text-emerald-800 flex items-center justify-between">
-          <div className="flex items-center gap-2">
+        <div className="p-3 bg-emerald-50 border border-emerald-200 rounded-xl text-xs text-emerald-800 flex items-center justify-between gap-2 animate-in fade-in duration-100">
+          <div className="flex items-center gap-2 min-w-0">
             <CheckCircle2 className="w-4 h-4 text-emerald-600 shrink-0" />
-            <span>{swapSuccess}</span>
+            <span className="truncate">{swapSuccess}</span>
           </div>
-          <button onClick={() => setSwapSuccess(null)} className="text-emerald-600 hover:text-emerald-800">
-            <X className="w-4 h-4" />
-          </button>
+          <div className="flex items-center gap-2 shrink-0">
+            {previousGrid && (
+              <button
+                type="button"
+                onClick={handleUndoLastMove}
+                disabled={isSavingDraft}
+                className="px-2.5 py-1 text-xs font-bold text-emerald-800 bg-white hover:bg-emerald-100/70 border border-emerald-300 rounded-lg shadow-2xs transition-colors cursor-pointer flex items-center gap-1"
+                title="Undo last period move or swap"
+              >
+                <RotateCcw className="w-3.5 h-3.5 text-emerald-600" />
+                <span>Undo Move</span>
+              </button>
+            )}
+            <button onClick={() => setSwapSuccess(null)} className="text-emerald-600 hover:text-emerald-800 p-0.5">
+              <X className="w-4 h-4" />
+            </button>
+          </div>
         </div>
       )}
 
       {/* 7. LARGE INTERACTIVE TIMETABLE PREVIEW & EDITOR (Workstream B5, B6 & B7) */}
-      <div className="bg-white rounded-2xl border border-[#E3E5F0] overflow-hidden shadow-xs">
+      <div className="bg-white rounded-2xl border border-slate-200/80 overflow-hidden shadow-xs">
         {/* Context Header */}
-        <div className="p-4 border-b border-slate-200 bg-slate-50/50 flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+        <div className="p-5 border-b border-slate-100 flex flex-col sm:flex-row sm:items-center justify-between gap-4">
           <div>
-            <div className="flex items-center gap-2">
-              <h2 className="text-base font-extrabold text-slate-900">
-                {selectedClass ? `${selectedClass.yearOfStudy} — Section ${selectedClass.section}` : 'Timetable Preview'}
+            <div className="flex items-center gap-2.5">
+              <h2 className="text-xl sm:text-2xl font-black text-slate-900 tracking-tight">
+                {selectedClass ? `${selectedClass.yearOfStudy} — Section ${selectedClass.section}` : `${selectedYearOfStudy} Timetable`}
               </h2>
               <span
-                className={`text-[11px] font-bold px-2 py-0.5 rounded-full ${
+                className={`text-xs font-bold px-2.5 py-0.5 rounded-full ${
                   status === 'PUBLISHED'
-                    ? 'bg-emerald-100 text-emerald-800 border border-emerald-200'
-                    : status === 'GENERATED'
-                    ? 'bg-indigo-100 text-indigo-800 border border-indigo-200'
-                    : 'bg-slate-100 text-slate-600 border border-slate-200'
+                    ? 'bg-emerald-50 text-emerald-800 border border-emerald-200'
+                    : 'bg-amber-50 text-amber-700 border border-amber-200/80'
                 }`}
               >
-                {status === 'PUBLISHED' ? 'Locked / Published' : status === 'GENERATED' ? 'Draft Generated' : 'Draft'}
+                {status === 'PUBLISHED' ? 'Locked / Published' : 'Draft'}
               </span>
             </div>
-            <p className="text-[11px] text-slate-500 mt-0.5">
-              {status === 'PUBLISHED'
-                ? 'Immutable published version stored in institutional archive.'
-                : 'Click any slot to swap or move periods. Changes auto-save as drafts.'}
+            <p className="text-xs text-slate-500 flex items-center gap-1.5 mt-1">
+              <Info className="w-3.5 h-3.5 text-slate-400 shrink-0" />
+              <span>Tap a period to swap or move it. Changes save automatically as drafts.</span>
             </p>
           </div>
 
-          <div className="flex items-center gap-3 text-xs">
+          <div className="flex items-center gap-5 flex-wrap sm:flex-nowrap justify-between sm:justify-end">
+            {isSavingDraft && (
+              <span className="text-[11px] font-semibold text-[#3431B7] flex items-center gap-1.5 animate-pulse bg-indigo-50 border border-indigo-200 px-2 py-1 rounded-lg">
+                <RotateCcw className="w-3 h-3 animate-spin text-[#3431B7]" />
+                <span>Saving draft...</span>
+              </span>
+            )}
+
             <div className="text-right">
-              <span className="text-slate-400 block text-[10px] uppercase font-bold">Allocated Curriculum Hours</span>
-              <span className="font-extrabold text-slate-900">{totalAllocated} hrs</span>
+              <div className="text-2xl font-black text-slate-900 leading-none">
+                {totalAllocated} hrs
+              </div>
+              <div className="text-[10px] text-slate-400 font-semibold mt-0.5 whitespace-nowrap">
+                allocated per week
+              </div>
+            </div>
+
+            <div className="flex items-center gap-2">
+              <button
+                onClick={handleRunGenerator}
+                disabled={generating || !selectedClassId || (validation !== null && !validation.canGenerate)}
+                className="inline-flex items-center gap-2 px-4 py-2.5 rounded-xl text-xs font-bold text-slate-800 bg-white hover:bg-slate-50 border border-slate-300 transition-colors shadow-xs cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed"
+              >
+                <RotateCcw className={`w-3.5 h-3.5 ${generating ? 'animate-spin text-[#3431B7]' : 'text-slate-600'}`} />
+                <span>{generating ? 'Solving...' : grid.length > 0 ? 'Regenerate' : 'Generate Timetable'}</span>
+              </button>
+
+              {status !== 'PUBLISHED' ? (
+                <button
+                  onClick={() => setPublishModalOpen(true)}
+                  disabled={publishing || totalAllocated === 0 || grid.length === 0}
+                  className="inline-flex items-center gap-2 px-4 py-2.5 rounded-xl text-xs font-bold text-white bg-[#3431B7] hover:bg-[#2B299E] transition-colors shadow-xs cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed"
+                >
+                  <Lock className="w-3.5 h-3.5" />
+                  <span>Lock & Publish</span>
+                </button>
+              ) : (
+                <div className="inline-flex items-center gap-1.5 px-3 py-2 rounded-xl text-xs font-bold bg-emerald-50 text-emerald-800 border border-emerald-200">
+                  <CheckCircle2 className="w-4 h-4 text-emerald-600" />
+                  <span>Locked & Published</span>
+                </div>
+              )}
             </div>
           </div>
         </div>
@@ -1090,11 +1199,15 @@ export default function GeneratorPage() {
           <TimetableGrid
             grid={grid}
             teachingPeriods={teachingPeriods}
+            allPeriods={allPeriodsList}
             days={days}
             isEditable={status !== 'PUBLISHED'}
             selectedSlot={selectedSlot}
             onSlotClick={handleSlotClick}
+            onSlotDrop={handleExecuteSlotMoveOrSwap}
             slotSubtitleType="staff"
+            showLegend={true}
+            totalAllocated={totalAllocated}
           />
         )}
       </div>

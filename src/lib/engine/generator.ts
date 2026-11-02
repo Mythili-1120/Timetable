@@ -24,9 +24,68 @@ export interface GenerationResult {
   similarityScore?: number;
 }
 
+export interface DiverseGenerationOptions {
+  maxSearchAttempts?: number; // Target: explore up to 100 candidate attempts (default 100)
+  maxTimeMs?: number; // Bounded compute time limit in milliseconds (default 3000ms)
+  currentGrid?: (TimetableSlot | null)[][];
+  previousFingerprints?: string[];
+  seedOffset?: number;
+}
+
+export interface DiverseAlternativeResult {
+  success: boolean;
+  selectedCandidate?: GenerationResult;
+  diagnostics?: string[];
+  totalExploredAttempts: number;
+  uniqueValidFound: number;
+  fingerprint?: string;
+  similarityToCurrent?: number;
+}
+
 export interface SlotSwapValidation {
   valid: boolean;
   reason?: string;
+}
+
+/**
+ * Computes a structural fingerprint string for a timetable grid.
+ * Keyed strictly by subjectId + memberId per slot position.
+ */
+export function computeTimetableFingerprint(grid: (TimetableSlot | null)[][]): string {
+  if (!grid || grid.length === 0) return '';
+  return grid
+    .map(row => row.map(cell => (cell ? `${cell.subjectId}@${cell.memberId}` : '-')).join(','))
+    .join(';');
+}
+
+/**
+ * Computes percentage similarity between two timetable grids (0 to 100%).
+ */
+export function calculateTimetableSimilarity(
+  gridA: (TimetableSlot | null)[][],
+  gridB: (TimetableSlot | null)[][]
+): number {
+  if (!gridA || !gridB || gridA.length === 0 || gridB.length === 0) return 0;
+  const days = Math.min(gridA.length, gridB.length);
+  const periods = Math.min(gridA[0]?.length || 0, gridB[0]?.length || 0);
+
+  let matching = 0;
+  let total = 0;
+
+  for (let d = 0; d < days; d++) {
+    for (let p = 0; p < periods; p++) {
+      const cellA = gridA[d]?.[p];
+      const cellB = gridB[d]?.[p];
+      if (cellA || cellB) {
+        total++;
+        if (cellA && cellB && cellA.subjectId === cellB.subjectId && cellA.memberId === cellB.memberId) {
+          matching++;
+        }
+      }
+    }
+  }
+
+  return total > 0 ? Math.round((matching / total) * 100) : 0;
 }
 
 /**
@@ -130,14 +189,21 @@ export class TimetableEngine {
       const blockSize = subj.labBlockHours || lab.weeklyHours || (lab.weeklyHours >= 4 ? 4 : lab.weeklyHours >= 3 ? 3 : 2);
 
       let placed = false;
-      // Controlled variation: vary start period preferences between morning and afternoon blocks
+      // Controlled variation: explore diverse morning and afternoon starts
+      const startPattern = variantIndex % 4;
       const baseStarts =
         blockSize <= 2 ? [0, 1, 3, 5] : blockSize <= 3 ? [0, 3, 4] : [0, 3];
-      const validLabStarts =
-        variantIndex % 2 === 1 ? [...baseStarts].reverse() : baseStarts;
+      let validLabStarts = baseStarts;
+      if (startPattern === 1) {
+        validLabStarts = [...baseStarts].reverse();
+      } else if (startPattern === 2) {
+        validLabStarts = blockSize <= 2 ? [3, 5, 0, 1] : [3, 0];
+      } else if (startPattern === 3) {
+        validLabStarts = blockSize <= 2 ? [1, 5, 0, 3] : [0, 3];
+      }
 
       // Permute day search order using variant offset to avoid always clustering on Day 0
-      const dayShift = (variantIndex * 2 + labIdx) % daysCount;
+      const dayShift = (variantIndex * 3 + labIdx * 2) % daysCount;
 
       for (let d = 0; d < daysCount && !placed; d++) {
         const day = (d + dayShift) % daysCount;
@@ -226,22 +292,41 @@ export class TimetableEngine {
 
     // Controlled diversity: if variantIndex > 0, permute assignments with equal constraint counts
     if (variantIndex > 0 && theoryQueue.length > 1) {
-      // Deterministic rotation based on variantIndex
-      const rotationOffset = (variantIndex * 3) % theoryQueue.length;
-      const rotated = [
-        ...theoryQueue.slice(rotationOffset),
-        ...theoryQueue.slice(0, rotationOffset)
-      ];
-      theoryQueue.splice(0, theoryQueue.length, ...rotated);
+      const mode = variantIndex % 4;
+      if (mode === 1) {
+        const rotationOffset = (variantIndex * 3) % theoryQueue.length;
+        const rotated = [
+          ...theoryQueue.slice(rotationOffset),
+          ...theoryQueue.slice(0, rotationOffset)
+        ];
+        theoryQueue.splice(0, theoryQueue.length, ...rotated);
+      } else if (mode === 2) {
+        const rotationOffset = (variantIndex * 5) % theoryQueue.length;
+        const rotated = [
+          ...theoryQueue.slice(rotationOffset),
+          ...theoryQueue.slice(0, rotationOffset)
+        ].reverse();
+        theoryQueue.splice(0, theoryQueue.length, ...rotated);
+      } else if (mode === 3) {
+        const half = Math.floor(theoryQueue.length / 2);
+        const swapped = [...theoryQueue.slice(half), ...theoryQueue.slice(0, half)];
+        theoryQueue.splice(0, theoryQueue.length, ...swapped);
+      }
     }
 
     // Helper: Staggered candidate periods for balanced rotation across days
     function getCandidatePeriods(day: number, stagger: boolean): number[] {
+      const mode = Math.floor(variantIndex / 2) % 3;
       if (!stagger) {
+        if (mode === 1) {
+          return Array.from({ length: periodsPerDay }, (_, i) => periodsPerDay - 1 - i);
+        }
         return Array.from({ length: periodsPerDay }, (_, i) => i);
       }
-      // Rotates starting period by (day * 2 + variantIndex * 3) % periodsPerDay to prevent repetitive slots
       const offset = (day * 2 + variantIndex * 3) % periodsPerDay;
+      if (mode === 1) {
+        return Array.from({ length: periodsPerDay }, (_, i) => (offset + periodsPerDay - 1 - i) % periodsPerDay);
+      }
       return Array.from({ length: periodsPerDay }, (_, i) => (offset + i) % periodsPerDay);
     }
 
@@ -411,8 +496,126 @@ export class TimetableEngine {
   }
 
   /**
+   * Explores a bounded candidate search space (target: up to 100 candidate attempts)
+   * entirely inside the engine layer. Rejects exact duplicates, penalizes near-duplicates,
+   * balances daily workload, and selects the single best diverse schedule.
+   * Does NOT return the entire candidate array to the client.
+   */
+  static generateDiverseAlternative(
+    input: GenerationInput,
+    options: DiverseGenerationOptions = {}
+  ): DiverseAlternativeResult {
+    const maxAttempts = options.maxSearchAttempts || 100;
+    const timeLimitMs = options.maxTimeMs || 3000;
+    const startTime = Date.now();
+
+    const currentFingerprint = options.currentGrid
+      ? computeTimetableFingerprint(options.currentGrid)
+      : '';
+
+    const excludedFingerprints = new Set<string>();
+    if (currentFingerprint) excludedFingerprints.add(currentFingerprint);
+    if (options.previousFingerprints) {
+      options.previousFingerprints.forEach(fp => {
+        if (fp) excludedFingerprints.add(fp);
+      });
+    }
+
+    const seenInRun = new Set<string>();
+    const validCandidates: {
+      result: GenerationResult;
+      fingerprint: string;
+      similarity: number;
+      compositeScore: number;
+    }[] = [];
+
+    let attemptsExecuted = 0;
+    const baseSeed = options.seedOffset || 0;
+
+    for (let attempt = 0; attempt < maxAttempts; attempt++) {
+      // Respect bounded compute budget
+      if (Date.now() - startTime > timeLimitMs) {
+        break;
+      }
+
+      attemptsExecuted++;
+      const variantIndex = baseSeed + attempt;
+      const candidate = this.generateCandidate(input, variantIndex, options.currentGrid);
+
+      if (candidate.success && candidate.grid) {
+        const fp = computeTimetableFingerprint(candidate.grid);
+
+        // Skip exact structural duplicate already evaluated in this run
+        if (seenInRun.has(fp)) continue;
+        seenInRun.add(fp);
+
+        // Check if exact duplicate of current or previous draft
+        const isHistoricalDuplicate = excludedFingerprints.has(fp);
+
+        const similarity = options.currentGrid
+          ? calculateTimetableSimilarity(candidate.grid, options.currentGrid)
+          : 0;
+
+        // Diversity reward: higher score for different placements
+        const diversityBonus = 100 - similarity; // 0 (identical) to 100 (completely different)
+
+        // Calculate composite score
+        // If historical duplicate: heavy penalty (-1000) so it's only chosen as last resort
+        const duplicatePenalty = isHistoricalDuplicate ? 1000 : 0;
+        const compositeScore =
+          (candidate.qualityScore || 80) * 0.4 +
+          diversityBonus * 0.6 -
+          duplicatePenalty;
+
+        validCandidates.push({
+          result: candidate,
+          fingerprint: fp,
+          similarity,
+          compositeScore
+        });
+
+        // Early exit optimization: if we have found at least 10 unique valid candidates
+        // and explored at least 30 attempts with high diversity and quality
+        if (validCandidates.length >= 10 && attempt >= 30 && compositeScore >= 85) {
+          break;
+        }
+      }
+    }
+
+    // If no valid candidates were produced
+    if (validCandidates.length === 0) {
+      const fallback = this.generateCandidate(input, 0, options.currentGrid);
+      return {
+        success: false,
+        diagnostics: fallback.diagnostics || [
+          'Constraint satisfaction failed: Could not generate a valid timetable satisfying all faculty and section constraints.'
+        ],
+        totalExploredAttempts: attemptsExecuted,
+        uniqueValidFound: 0
+      };
+    }
+
+    // Sort candidates by composite score descending (highest quality and diversity first)
+    validCandidates.sort((a, b) => b.compositeScore - a.compositeScore);
+
+    // Prefer non-duplicate if one exists
+    const nonDuplicates = validCandidates.filter(c => c.fingerprint !== currentFingerprint);
+    const chosen = nonDuplicates.length > 0 ? nonDuplicates[0] : validCandidates[0];
+
+    return {
+      success: true,
+      selectedCandidate: chosen.result,
+      diagnostics: [],
+      totalExploredAttempts: attemptsExecuted,
+      uniqueValidFound: validCandidates.length,
+      fingerprint: chosen.fingerprint,
+      similarityToCurrent: chosen.similarity
+    };
+  }
+
+  /**
    * Generates multiple diverse valid candidate variants (target: up to 10 distinct schedules).
-   * Ranks candidates by timetable quality and penalizes excessive similarity to previous drafts.
+   * Backward-compatible entry point for existing tests or callers.
    */
   static generateDiverseCandidates(
     input: GenerationInput,
@@ -422,42 +625,22 @@ export class TimetableEngine {
     candidates: GenerationResult[];
     bestCandidate: GenerationResult;
   } {
-    const validCandidates: GenerationResult[] = [];
-    const seenGridSignatures = new Set<string>();
-
-    const maxAttempts = Math.min(20, targetCandidatesCount * 2);
-
-    for (let variant = 0; variant < maxAttempts && validCandidates.length < targetCandidatesCount; variant++) {
-      const result = this.generateCandidate(input, variant, previousGrid);
-
-      if (result.success) {
-        // Construct canonical structural signature to ensure genuine diversity
-        const signature = result.grid
-          .map(row => row.map(c => (c ? `${c.subjectId}_${c.memberId}` : '-')).join(','))
-          .join(';');
-
-        if (!seenGridSignatures.has(signature)) {
-          seenGridSignatures.add(signature);
-          validCandidates.push(result);
-        }
-      }
-    }
-
-    // Rank candidates by composite score: Quality Score penalized by similarity to previous layout
-    validCandidates.sort((a, b) => {
-      const scoreA = (a.qualityScore || 80) - (a.similarityScore || 0) * 0.4;
-      const scoreB = (b.qualityScore || 80) - (b.similarityScore || 0) * 0.4;
-      return scoreB - scoreA;
+    const alternative = this.generateDiverseAlternative(input, {
+      maxSearchAttempts: Math.max(20, targetCandidatesCount * 3),
+      currentGrid: previousGrid
     });
 
-    const bestCandidate =
-      validCandidates.length > 0
-        ? validCandidates[0]
-        : this.generateCandidate(input, 0, previousGrid);
+    if (alternative.success && alternative.selectedCandidate) {
+      return {
+        candidates: [alternative.selectedCandidate],
+        bestCandidate: alternative.selectedCandidate
+      };
+    }
 
+    const fallback = this.generateCandidate(input, 0, previousGrid);
     return {
-      candidates: validCandidates,
-      bestCandidate
+      candidates: [fallback],
+      bestCandidate: fallback
     };
   }
 
