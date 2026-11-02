@@ -8,6 +8,7 @@ import { getPublishedTimetables, getCachedPublishedTimetables, getStaffSchedule 
 import { getCollegeSettings, getCachedCollegeSettings } from '../../../lib/services/settingsService';
 import { Staff, Department, ClassSection, PublishedTimetable, CollegeSettings, TimetableSlot } from '../../../types';
 import { Printer, UserCheck, CalendarDays, BookOpen, Clock, Building, GraduationCap } from 'lucide-react';
+import TimetableGrid from '../../../components/TimetableGrid';
 
 export default function TimetableViewsPage() {
   const initStaff = getCachedStaff();
@@ -274,57 +275,12 @@ export default function TimetableViewsPage() {
             </div>
 
             {/* Teaching Grid */}
-            <div className="border border-slate-300 rounded-lg overflow-hidden">
-              <table className="w-full text-center text-xs border-collapse">
-                <thead>
-                  <tr className="bg-slate-100 text-slate-700 font-bold border-b border-slate-300">
-                    <th className="py-2.5 px-3 border-r border-slate-300 w-24">Day</th>
-                    {teachingPeriods.map((p, idx) => (
-                      <th key={p.id} className="py-2.5 px-2 border-r border-slate-300">
-                        <div>{p.name}</div>
-                        <div className="text-[10px] text-slate-500 font-normal">{p.time}</div>
-                      </th>
-                    ))}
-                  </tr>
-                </thead>
-                <tbody className="divide-y divide-slate-200">
-                  {days.map((day, dIdx) => (
-                    <tr key={day} className="hover:bg-slate-50/50">
-                      <td className="py-3 px-3 font-bold text-slate-800 bg-slate-50 border-r border-slate-300 text-left">
-                        {day}
-                      </td>
-                      {teachingPeriods.map((p, pIdx) => {
-                        const slot = staffSchedule?.grid?.[dIdx]?.[pIdx];
-                        return (
-                          <td
-                            key={p.id}
-                            className={`py-2 px-1 border-r border-slate-300 h-16 ${
-                              slot ? 'bg-brand-50/50' : 'bg-white'
-                            }`}
-                          >
-                            {slot ? (
-                              <div className="flex flex-col items-center justify-center p-1 rounded-sm bg-white border border-brand-200 shadow-2xs">
-                                <span className="font-bold text-brand-900 text-[11px] truncate max-w-28">
-                                  {slot.subjectCode}
-                                </span>
-                                <span className="text-[10px] text-slate-600 font-medium truncate max-w-28">
-                                  {slot.classLabel}
-                                </span>
-                                <span className="text-[9px] text-brand-600 font-mono">
-                                  {slot.departmentId.replace('dept-', '').toUpperCase()}
-                                </span>
-                              </div>
-                            ) : (
-                              <span className="text-slate-300">—</span>
-                            )}
-                          </td>
-                        );
-                      })}
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
+            <TimetableGrid
+              grid={staffSchedule?.grid || []}
+              teachingPeriods={teachingPeriods}
+              days={days}
+              slotSubtitleType="class"
+            />
 
             {/* Classes Taught Summary */}
             {staffSchedule && staffSchedule.classesTaught.length > 0 && (
@@ -400,57 +356,12 @@ export default function TimetableViewsPage() {
             </div>
 
             {/* Timetable Grid */}
-            <div className="border border-slate-300 rounded-lg overflow-hidden">
-              <table className="w-full text-center text-xs border-collapse">
-                <thead>
-                  <tr className="bg-slate-100 text-slate-700 font-bold border-b border-slate-300">
-                    <th className="py-2.5 px-3 border-r border-slate-300 w-24">Day</th>
-                    {teachingPeriods.map((p) => (
-                      <th key={p.id} className="py-2.5 px-2 border-r border-slate-300">
-                        <div>{p.name}</div>
-                        <div className="text-[10px] text-slate-500 font-normal">{p.time}</div>
-                      </th>
-                    ))}
-                  </tr>
-                </thead>
-                <tbody className="divide-y divide-slate-200">
-                  {days.map((day, dIdx) => (
-                    <tr key={day} className="hover:bg-slate-50/50">
-                      <td className="py-3 px-3 font-bold text-slate-800 bg-slate-50 border-r border-slate-300 text-left">
-                        {day}
-                      </td>
-                      {teachingPeriods.map((p, pIdx) => {
-                        const slot = activeClassTimetable.grid?.[dIdx]?.[pIdx];
-                        return (
-                          <td
-                            key={p.id}
-                            className={`py-2 px-1 border-r border-slate-300 h-16 ${
-                              slot ? 'bg-indigo-50/40' : 'bg-white'
-                            }`}
-                          >
-                            {slot ? (
-                              <div className="flex flex-col items-center justify-center p-1 rounded-sm bg-white border border-indigo-200 shadow-2xs">
-                                <span className="font-bold text-slate-900 text-[11px] truncate max-w-28">
-                                  {slot.subjectCode}
-                                </span>
-                                <span className="text-[10px] text-brand-700 font-medium truncate max-w-28">
-                                  {slot.staffName}
-                                </span>
-                                <span className="text-[9px] text-slate-400 font-mono">
-                                  {slot.memberId}
-                                </span>
-                              </div>
-                            ) : (
-                              <span className="text-slate-300">—</span>
-                            )}
-                          </td>
-                        );
-                      })}
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
+            <TimetableGrid
+              grid={activeClassTimetable.grid || []}
+              teachingPeriods={teachingPeriods}
+              days={days}
+              slotSubtitleType="staff"
+            />
 
             {/* Print Signatures */}
             <div className="grid grid-cols-3 gap-6 pt-12 text-center text-xs font-semibold text-slate-700 print-only">

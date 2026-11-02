@@ -13,7 +13,7 @@ import {
 } from '../../types';
 import { logAdminAction } from './auditService';
 import { getAllStaffDepartmentLinks, getStaffById, linkStaffToDepartment, invalidateStaffCache, getAllStaff } from './staffService';
-import { getAllSubjects, normalizeDeptId } from './subjectService';
+import { getAllSubjects, normalizeDeptId, formatSemesterName, getSemesterNumber } from './subjectService';
 import { getAllClasses } from './classService';
 
 export interface AssignmentValidationResult {
@@ -295,28 +295,9 @@ export async function validateStaffSubjectEligibility(
     };
   }
 
-  // 3. Verify Subject Eligibility
-  const eligibleSubjectIds = new Set<string>();
-  if (Array.isArray(staff.subjectIds)) {
-    staff.subjectIds.forEach(id => {
-      eligibleSubjectIds.add(id);
-      eligibleSubjectIds.add(id.trim());
-    });
-  }
-  if (activeLink && Array.isArray(activeLink.subjectIds)) {
-    activeLink.subjectIds.forEach(id => {
-      eligibleSubjectIds.add(id);
-      eligibleSubjectIds.add(id.trim());
-    });
-  }
-
-  if (!eligibleSubjectIds.has(cleanSubjId)) {
-    return {
-      isEligible: false,
-      error: 'This Staff member is not configured as eligible for the selected Subject. Update Staff Subject details before assigning.'
-    };
-  }
-
+  // Centralized Allocation Architecture: Any active faculty member can be allocated
+  // to an institutional curriculum course. Legacy subjectIds are preserved for backward compatibility
+  // but are no longer a mandatory prerequisite blocking assignment.
   return { isEligible: true };
 }
 
@@ -339,10 +320,10 @@ export async function createAssignment(
     throw new Error(validation.error || 'Invalid assignment input');
   }
 
-  // Verify Staff Subject Eligibility before saving
-  const eligibility = await validateStaffSubjectEligibility(data.memberId, data.departmentId, data.subjectId);
-  if (!eligibility.isEligible) {
-    throw new Error(eligibility.error);
+  // Verify Staff exists and is active before saving
+  const staff = await getStaffById(data.memberId.trim());
+  if (!staff || staff.status !== 'ACTIVE') {
+    throw new Error(`Faculty member [${data.memberId}] does not exist or is inactive.`);
   }
 
   // Deterministic unique slot ID: asgn_{classId}_{cleanSemester}_{cleanSubjectId}
@@ -494,7 +475,11 @@ export async function copyAssignmentsBetweenClasses(
     }
 
     // Ensure staff member is linked to target class department if needed
-    await mapStaffToSubject(asgn.memberId, targetClass.departmentId, asgn.subjectId, adminUid);
+    const links = await getAllStaffDepartmentLinks();
+    const hasLink = links.some(l => l.memberId === asgn.memberId && l.departmentId === targetClass.departmentId && l.status === 'ACTIVE');
+    if (!hasLink) {
+      await linkStaffToDepartment(asgn.memberId, targetClass.departmentId, adminUid);
+    }
 
     await createAssignment(
       {
@@ -551,7 +536,7 @@ export async function getStaffMappedSubjectIds(
 /**
  * Retrieves the authoritative active curriculum subjects for a specific class section.
  */
-export async function getClassCurriculumSubjects(classInput: string | ClassSection): Promise<Subject[]> {
+export async function getClassCurriculumSubjects(classInput: string | ClassSection, semester?: string | number): Promise<Subject[]> {
   let classSection: ClassSection | undefined;
 
   if (typeof classInput === 'string') {
@@ -573,6 +558,12 @@ export async function getClassCurriculumSubjects(classInput: string | ClassSecti
     // Match yearOfStudy if configured
     if (subj.yearOfStudy && classSection!.yearOfStudy && subj.yearOfStudy !== classSection!.yearOfStudy) {
       return false;
+    }
+    if (semester && semester !== 'ALL') {
+      const targetStr = formatSemesterName(semester);
+      const targetNum = getSemesterNumber(semester);
+      if (subj.semester && subj.semester !== targetStr) return false;
+      if (subj.semesterNumber && subj.semesterNumber !== targetNum) return false;
     }
     return true;
   });
@@ -601,9 +592,11 @@ export async function resolveSubjectForStaffAndClass(params: {
     throw new Error(`Staff member "${params.memberId}" does not exist.`);
   }
 
-  let curriculumSubjects = await getClassCurriculumSubjects(classSection);
-  if (params.semester) {
-    const semMatches = curriculumSubjects.filter(s => s.semester === params.semester);
+  let curriculumSubjects = await getClassCurriculumSubjects(classSection, params.semester);
+  if (params.semester && params.semester !== 'ALL') {
+    const targetStr = formatSemesterName(params.semester);
+    const targetNum = getSemesterNumber(params.semester);
+    const semMatches = curriculumSubjects.filter(s => s.semester === targetStr || s.semesterNumber === targetNum);
     if (semMatches.length > 0) {
       curriculumSubjects = semMatches;
     }
@@ -729,10 +722,7 @@ export async function autoCreateTeachingAssignment(
     targetSemester = subjObj.semester;
   }
 
-  // 1. Ensure staff-subject mapping is persisted for future auto-resolution
-  await mapStaffToSubject(targetMemberId, resolution.classSection.departmentId, targetSubjectId, adminUid);
-
-  // 2. Create canonical teaching assignment with deterministic ID and authoritative hours
+  // Create canonical teaching assignment with deterministic ID and authoritative hours
   return await createAssignment(
     {
       memberId: targetMemberId,
@@ -789,9 +779,6 @@ export async function reassignStaff(
   if (!hasLink) {
     await linkStaffToDepartment(newMemberId, existing.departmentId, adminUid);
   }
-
-  // Ensure new staff is mapped to the subject
-  await mapStaffToSubject(newMemberId, existing.departmentId, existing.subjectId, adminUid);
 
   const now = new Date().toISOString();
   const oldMemberId = existing.memberId;
@@ -984,8 +971,11 @@ export async function validateSubjectStaffForClass(
 
   // Filter by semester if specified (e.g. 'Semester 1')
   const scopedSubjects = deptSubjects.filter((s: Subject) => {
-    if (semester && semester !== 'ALL' && s.semester) {
-      return s.semester === semester;
+    if (semester && semester !== 'ALL') {
+      const targetStr = formatSemesterName(semester);
+      const targetNum = getSemesterNumber(semester);
+      if (s.semester && s.semester !== targetStr) return false;
+      if (s.semesterNumber && s.semesterNumber !== targetNum) return false;
     }
     return true;
   });
@@ -1145,27 +1135,7 @@ export async function validateSubjectStaffForClass(
       continue;
     }
 
-    // G. STAFF_SUBJECT_INELIGIBLE: Staff member lacks subject qualification
-    const staffEligibleSubjs = Array.isArray(staff.subjectIds) ? staff.subjectIds.map(id => id.trim()) : [];
-    const linkEligibleSubjs = (linkSubjMap.get(`${staff.memberId}_${targetNormDept}`) || []).map(id => id.trim());
-    const isEligible = staffEligibleSubjs.includes(cleanSubjId) || linkEligibleSubjs.includes(cleanSubjId);
-
-    if (!isEligible) {
-      missingStaffSubjects.push(subj);
-      structuredErrors.push({
-        errorCode: 'STAFF_SUBJECT_INELIGIBLE',
-        subjectId: subj.subjectId,
-        subjectName: subj.name,
-        departmentId: classSection.departmentId,
-        classId: classSection.classId,
-        memberId: staff.memberId,
-        staffName: staff.displayName || staff.memberId,
-        message: `Assigned faculty ${staff.displayName || staff.memberId} is not configured as qualified for ${subj.name} (${subj.code}).`,
-        recommendedAction: 'Edit this faculty member in the Staff tab and check this course under Qualified Subjects.'
-      });
-      continue;
-    }
-
+    // Valid active assignment in place
     assignedSubjects.push({ subject: subj, assignment: asgn, staff });
   }
 

@@ -1,7 +1,119 @@
 import { collection, doc, getDocs, setDoc, updateDoc, query, where } from 'firebase/firestore';
 import { db } from '../firebase/config';
-import { Subject } from '../../types';
+import {
+  Subject,
+  UndergraduateYear,
+  SemesterDefinition,
+  YEAR_SEMESTERS
+} from '../../types';
 import { logAdminAction } from './auditService';
+
+// Canonical Semester Helper Functions
+export { YEAR_SEMESTERS };
+export type { UndergraduateYear, SemesterDefinition };
+
+export function getSemestersForYear(year?: string | null): SemesterDefinition[] {
+  if (!year) {
+    return YEAR_SEMESTERS['1st Year'];
+  }
+  const clean = year.trim();
+  if (clean === '1st Year' || clean.toLowerCase().includes('first') || clean === '1') {
+    return YEAR_SEMESTERS['1st Year'];
+  }
+  if (clean === '2nd Year' || clean.toLowerCase().includes('second') || clean === '2') {
+    return YEAR_SEMESTERS['2nd Year'];
+  }
+  if (clean === '3rd Year' || clean.toLowerCase().includes('third') || clean === '3') {
+    return YEAR_SEMESTERS['3rd Year'];
+  }
+  if (clean === '4th Year' || clean.toLowerCase().includes('fourth') || clean === '4') {
+    return YEAR_SEMESTERS['4th Year'];
+  }
+  return YEAR_SEMESTERS['1st Year'];
+}
+
+export function getSemesterNumber(semester?: string | number | null): number | undefined {
+  if (semester === undefined || semester === null) return undefined;
+  if (typeof semester === 'number') return semester;
+  const match = semester.match(/\d+/);
+  return match ? parseInt(match[0], 10) : undefined;
+}
+
+export function formatSemesterName(semester?: string | number | null): string {
+  if (!semester) return '';
+  if (typeof semester === 'string' && semester.startsWith('Semester ')) return semester;
+  const num = getSemesterNumber(semester);
+  return num ? `Semester ${num}` : String(semester);
+}
+
+export function getYearForSemester(semester?: string | number | null): UndergraduateYear {
+  const num = getSemesterNumber(semester);
+  if (!num) return '1st Year';
+  if (num <= 2) return '1st Year';
+  if (num <= 4) return '2nd Year';
+  if (num <= 6) return '3rd Year';
+  return '4th Year';
+}
+
+/**
+ * Reconciles subject semester representation in memory without altering existing fields.
+ * If semester string exists but semesterNumber is absent, derives semesterNumber.
+ * If semesterNumber exists but semester string is absent, derives semester string.
+ * If neither exists, flags requiresSemesterReview: true so Admin can review and assign.
+ */
+export function reconcileSubjectSemester(s: Subject): Subject {
+  let semName = s.semester?.trim();
+  let semNum = s.semesterNumber;
+
+  if (semNum !== undefined && !semName) {
+    semName = formatSemesterName(semNum);
+  } else if (semName && semNum === undefined) {
+    semNum = getSemesterNumber(semName);
+  }
+
+  const requiresReview = !semName && semNum === undefined;
+
+  return {
+    ...s,
+    ...(semName ? { semester: semName } : {}),
+    ...(semNum !== undefined ? { semesterNumber: semNum } : {}),
+    requiresSemesterReview: requiresReview
+  };
+}
+
+/**
+ * Checks for duplicate subject code within the applicable Department + Year + Semester scope.
+ * Preserves canonical Subject IDs and prevents accidental duplicate creation or overwrites.
+ */
+export function findDuplicateSubject(
+  subjects: Subject[],
+  code: string,
+  departmentId: string,
+  yearOfStudy?: string,
+  semester?: string | number,
+  excludeSubjectId?: string
+): Subject | null {
+  const cleanCode = code.trim().toUpperCase();
+  const normDept = normalizeDeptId(departmentId);
+  const targetSemNum = getSemesterNumber(semester);
+  const targetSemName = formatSemesterName(semester);
+
+  return (
+    subjects.find(s => {
+      if (excludeSubjectId && s.subjectId === excludeSubjectId) return false;
+      if (normalizeDeptId(s.departmentId) !== normDept) return false;
+      if (s.code.trim().toUpperCase() !== cleanCode) return false;
+      if (s.status === 'INACTIVE') return false;
+
+      // Scope checking:
+      if (yearOfStudy && s.yearOfStudy && s.yearOfStudy !== yearOfStudy) return false;
+      if (targetSemNum && s.semesterNumber && s.semesterNumber !== targetSemNum) return false;
+      if (targetSemName && s.semester && s.semester !== targetSemName) return false;
+
+      return true;
+    }) || null
+  );
+}
 
 // In-memory cache for fast responsive navigation
 let cachedSubjects: Subject[] | null = null;
@@ -80,7 +192,7 @@ export async function getAllSubjects(departmentId?: string, forceRefresh = false
 
   try {
     const snap = await getDocs(collection(db, 'subjects'));
-    const result = snap.docs.map(d => d.data() as Subject);
+    const result = snap.docs.map(d => reconcileSubjectSemester(d.data() as Subject));
     cachedSubjects = result;
     cacheTime = Date.now();
 
@@ -120,13 +232,22 @@ export async function createSubject(
     labBlockHours?: number;
     departmentId: string;
     academicYear: string;
-    yearOfStudy?: '1st Year' | '2nd Year' | '3rd Year' | '4th Year';
+    yearOfStudy?: UndergraduateYear;
     semester?: string;
+    semesterNumber?: number;
   },
   adminUid: string
 ): Promise<Subject> {
   const codeClean = data.code.trim().toUpperCase();
   const subjectId = `SUBJ-${data.departmentId.replace('dept-', '').toUpperCase()}-${codeClean}`;
+
+  let semName = data.semester?.trim();
+  let semNum = data.semesterNumber;
+  if (semNum !== undefined && !semName) {
+    semName = formatSemesterName(semNum);
+  } else if (semName && semNum === undefined) {
+    semNum = getSemesterNumber(semName);
+  }
 
   const payload: Record<string, any> = {
     subjectId,
@@ -158,8 +279,11 @@ export async function createSubject(
     payload.yearOfStudy = data.yearOfStudy;
   }
 
-  if (data.semester !== undefined && data.semester !== null) {
-    payload.semester = data.semester;
+  if (semName) {
+    payload.semester = semName;
+  }
+  if (semNum !== undefined) {
+    payload.semesterNumber = semNum;
   }
 
   const cleanRecord = sanitizeSubjectPayload(payload) as Subject;
@@ -180,6 +304,22 @@ export async function updateSubject(
     ...updates,
     updatedAt: new Date().toISOString()
   };
+
+  // Align semester and semesterNumber whenever either is provided
+  if (updates.semester !== undefined || updates.semesterNumber !== undefined) {
+    let semName = updates.semester?.trim();
+    let semNum = updates.semesterNumber;
+    if (semNum !== undefined && !semName) {
+      semName = formatSemesterName(semNum);
+    } else if (semName && semNum === undefined) {
+      semNum = getSemesterNumber(semName);
+    }
+    if (semName !== undefined) payload.semester = semName;
+    if (semNum !== undefined) payload.semesterNumber = semNum;
+    if (semName || semNum !== undefined) {
+      payload.requiresSemesterReview = false;
+    }
+  }
 
   // If updates explicitly specify Lab with undefined labBlockHours, default to 4
   if (updates.type === 'Lab' && updates.labBlockHours === undefined) {

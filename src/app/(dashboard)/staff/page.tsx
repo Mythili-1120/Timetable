@@ -20,7 +20,6 @@ import {
 import {
   getAllSubjects,
   getCachedSubjects,
-  createSubject,
   normalizeDeptId
 } from '../../../lib/services/subjectService';
 import { validatePhoneNumber } from '../../../lib/utils/phoneValidation';
@@ -62,22 +61,10 @@ export default function StaffPage() {
   const [initials, setInitials] = useState('');
   const [email, setEmail] = useState('');
   const [phone, setPhone] = useState('');
-  const [designation, setDesignation] = useState('Assistant Professor');
+  const [designation, setDesignation] = useState('');
   const [primaryDept, setPrimaryDept] = useState(() => (initialDepts && initialDepts.length > 0 ? initialDepts[0].departmentId : ''));
-  const [selectedSubjectIds, setSelectedSubjectIds] = useState<string[]>([]);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
-
-  // Inline Subject Creation state inside Staff modal
-  const [inlineSubjectOpen, setInlineSubjectOpen] = useState(false);
-  const [newSubjCode, setNewSubjCode] = useState('');
-  const [newSubjName, setNewSubjName] = useState('');
-  const [newSubjType, setNewSubjType] = useState<'Theory' | 'Lab'>('Theory');
-  const [newSubjWeeklyHours, setNewSubjWeeklyHours] = useState(4);
-  const [newSubjLabBlockHours, setNewSubjLabBlockHours] = useState(4);
-  const [creatingInlineSubj, setCreatingInlineSubj] = useState(false);
-  const [inlineSubjError, setInlineSubjError] = useState<string | null>(null);
-  const [inlineSubjSuccess, setInlineSubjSuccess] = useState<string | null>(null);
 
   // Staff Permanent Deletion modal state
   const [deleteConfirmOpen, setDeleteConfirmOpen] = useState(false);
@@ -119,65 +106,6 @@ export default function StaffPage() {
     loadData(false);
   }, []);
 
-  // Filter subjects belonging to currently chosen primary department with canonical ID normalization
-  const currentDeptSubjects = allSubjects.filter(s => {
-    const sNorm = normalizeDeptId(s.departmentId);
-    const pNorm = normalizeDeptId(primaryDept);
-    return sNorm === pNorm && s.status !== 'INACTIVE';
-  });
-
-  const handleCreateInlineSubject = async () => {
-    if (!newSubjCode.trim() || !newSubjName.trim()) {
-      setInlineSubjError('Subject code and subject name are required.');
-      return;
-    }
-    if (!primaryDept) {
-      setInlineSubjError('Please select a department first.');
-      return;
-    }
-    if (!user) {
-      setInlineSubjError('Session expired. Please log in again.');
-      return;
-    }
-
-    setCreatingInlineSubj(true);
-    setInlineSubjError(null);
-    setInlineSubjSuccess(null);
-
-    try {
-      const createdSubj = await createSubject(
-        {
-          code: newSubjCode.trim(),
-          name: newSubjName.trim(),
-          type: newSubjType,
-          weeklyHours: Number(newSubjWeeklyHours) || 4,
-          labBlockHours: newSubjType === 'Lab' ? (Number(newSubjLabBlockHours) || 4) : undefined,
-          departmentId: primaryDept,
-          academicYear: '2025–2026'
-        },
-        user.uid
-      );
-
-      // Add to local subjects immediately
-      setAllSubjects(prev => [createdSubj, ...prev.filter(s => s.subjectId !== createdSubj.subjectId)]);
-      // Automatically select the newly created subject for this staff member
-      setSelectedSubjectIds(prev => Array.from(new Set([...prev, createdSubj.subjectId])));
-      setInlineSubjSuccess(`Subject ${createdSubj.code} (${createdSubj.name}) created and added to selected qualifications.`);
-      // Reset inputs
-      setNewSubjCode('');
-      setNewSubjName('');
-      setNewSubjType('Theory');
-      setNewSubjWeeklyHours(4);
-      setNewSubjLabBlockHours(4);
-      setInlineSubjectOpen(false);
-    } catch (err: any) {
-      console.error('Error creating inline subject:', err);
-      setInlineSubjError(err?.message || 'Failed to create subject.');
-    } finally {
-      setCreatingInlineSubj(false);
-    }
-  };
-
   const handleDeleteStaff = async () => {
     if (!staffToDelete || !user) return;
     setDeleting(true);
@@ -201,16 +129,10 @@ export default function StaffPage() {
     setInitials('');
     setEmail('');
     setPhone('');
-    setDesignation('Assistant Professor');
+    setDesignation('');
     const defaultDept = departments.length > 0 ? departments[0].departmentId : '';
     setPrimaryDept(defaultDept);
-    setSelectedSubjectIds([]);
     setError(null);
-    setInlineSubjectOpen(false);
-    setInlineSubjError(null);
-    setInlineSubjSuccess(null);
-    setNewSubjCode('');
-    setNewSubjName('');
     setModalOpen(true);
   };
 
@@ -222,13 +144,7 @@ export default function StaffPage() {
     setPhone(member.phoneNumber || member.phone || '');
     setDesignation(member.designation);
     setPrimaryDept(member.primaryDepartmentId);
-    setSelectedSubjectIds(Array.isArray(member.subjectIds) ? member.subjectIds : []);
     setError(null);
-    setInlineSubjectOpen(false);
-    setInlineSubjError(null);
-    setInlineSubjSuccess(null);
-    setNewSubjCode('');
-    setNewSubjName('');
     setModalOpen(true);
   };
 
@@ -273,8 +189,7 @@ export default function StaffPage() {
             phone: cleanedPhone,
             phoneNumber: cleanedPhone,
             designation: designation.trim(),
-            primaryDepartmentId: primaryDept,
-            subjectIds: selectedSubjectIds
+            primaryDepartmentId: primaryDept
           },
           user.uid
         );
@@ -287,8 +202,7 @@ export default function StaffPage() {
             phone: cleanedPhone,
             phoneNumber: cleanedPhone,
             designation: designation.trim(),
-            primaryDepartmentId: primaryDept,
-            subjectIds: selectedSubjectIds
+            primaryDepartmentId: primaryDept
           },
           user.uid
         );
@@ -299,7 +213,6 @@ export default function StaffPage() {
       setInitials('');
       setEmail('');
       setPhone('');
-      setSelectedSubjectIds([]);
       setModalOpen(false);
       await loadData(true);
     } catch (err: any) {
@@ -685,220 +598,6 @@ export default function StaffPage() {
                     className="w-full px-3 py-2 text-sm border border-slate-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-brand-500"
                   />
                 </div>
-              </div>
-
-              {/* Subject(s) Qualified to Teach */}
-              <div>
-                <div className="flex items-center justify-between mb-1.5">
-                  <label className="block text-xs font-semibold uppercase tracking-wider text-slate-700">
-                    Subject(s) Qualified to Teach
-                  </label>
-                  <div className="flex items-center gap-2">
-                    <span className="text-[11px] font-semibold text-brand-700">
-                      {selectedSubjectIds.length} selected
-                    </span>
-                    <button
-                      type="button"
-                      onClick={() => {
-                        setInlineSubjectOpen(!inlineSubjectOpen);
-                        setInlineSubjError(null);
-                        setInlineSubjSuccess(null);
-                      }}
-                      className="inline-flex items-center gap-1 text-[11px] font-bold text-brand-700 hover:text-brand-800 bg-brand-50 hover:bg-brand-100 px-2 py-0.5 rounded-md border border-brand-200 transition-colors cursor-pointer"
-                    >
-                      <Plus className="w-3 h-3" />
-                      <span>{inlineSubjectOpen ? 'Close Subj Form' : 'Add New Subject'}</span>
-                    </button>
-                  </div>
-                </div>
-
-                {/* Inline New Subject Creation Card */}
-                {inlineSubjectOpen && (
-                  <div className="mb-3 p-3 bg-slate-50 border border-brand-200 rounded-xl space-y-2.5 animate-in fade-in duration-150">
-                    <div className="flex items-center justify-between">
-                      <span className="text-xs font-bold text-slate-800">
-                        Create New Subject in {departments.find(d => normalizeDeptId(d.departmentId) === normalizeDeptId(primaryDept))?.code || 'Selected Department'}
-                      </span>
-                      <span className="text-[10px] text-slate-500 font-mono">Subject Master</span>
-                    </div>
-
-                    {inlineSubjError && (
-                      <div className="p-2 bg-rose-50 border border-rose-200 rounded-lg text-xs text-rose-700 font-medium">
-                        {inlineSubjError}
-                      </div>
-                    )}
-
-                    <div className="grid grid-cols-2 gap-2">
-                      <div>
-                        <label className="block text-[11px] font-semibold text-slate-600 mb-0.5">Course Code *</label>
-                        <input
-                          type="text"
-                          placeholder="e.g. CS301"
-                          value={newSubjCode}
-                          onChange={(e) => setNewSubjCode(e.target.value.toUpperCase())}
-                          className="w-full px-2.5 py-1.5 text-xs border border-slate-300 rounded-lg focus:outline-none focus:ring-1 focus:ring-brand-500 bg-white uppercase font-bold"
-                        />
-                      </div>
-                      <div>
-                        <label className="block text-[11px] font-semibold text-slate-600 mb-0.5">Subject Name *</label>
-                        <input
-                          type="text"
-                          placeholder="e.g. Data Structures"
-                          value={newSubjName}
-                          onChange={(e) => setNewSubjName(e.target.value)}
-                          className="w-full px-2.5 py-1.5 text-xs border border-slate-300 rounded-lg focus:outline-none focus:ring-1 focus:ring-brand-500 bg-white"
-                        />
-                      </div>
-                    </div>
-
-                    <div className="grid grid-cols-3 gap-2">
-                      <div>
-                        <label className="block text-[11px] font-semibold text-slate-600 mb-0.5">Type</label>
-                        <select
-                          value={newSubjType}
-                          onChange={(e) => setNewSubjType(e.target.value as 'Theory' | 'Lab')}
-                          className="w-full px-2 py-1.5 text-xs border border-slate-300 rounded-lg focus:outline-none focus:ring-1 focus:ring-brand-500 bg-white"
-                        >
-                          <option value="Theory">Theory</option>
-                          <option value="Lab">Lab</option>
-                        </select>
-                      </div>
-                      <div>
-                        <label className="block text-[11px] font-semibold text-slate-600 mb-0.5">Weekly Hours</label>
-                        <input
-                          type="number"
-                          min={1}
-                          max={10}
-                          value={newSubjWeeklyHours}
-                          onChange={(e) => setNewSubjWeeklyHours(Number(e.target.value) || 4)}
-                          className="w-full px-2 py-1.5 text-xs border border-slate-300 rounded-lg focus:outline-none focus:ring-1 focus:ring-brand-500 bg-white"
-                        />
-                      </div>
-                      {newSubjType === 'Lab' ? (
-                        <div>
-                          <label className="block text-[11px] font-semibold text-slate-600 mb-0.5">Lab Block Hrs</label>
-                          <input
-                            type="number"
-                            min={2}
-                            max={6}
-                            value={newSubjLabBlockHours}
-                            onChange={(e) => setNewSubjLabBlockHours(Number(e.target.value) || 4)}
-                            className="w-full px-2 py-1.5 text-xs border border-slate-300 rounded-lg focus:outline-none focus:ring-1 focus:ring-brand-500 bg-white"
-                          />
-                        </div>
-                      ) : (
-                        <div className="flex items-end pb-1 text-[10px] text-slate-400">
-                          AY 2025–2026
-                        </div>
-                      )}
-                    </div>
-
-                    <div className="flex justify-end gap-2 pt-1">
-                      <button
-                        type="button"
-                        onClick={() => {
-                          setInlineSubjectOpen(false);
-                          setInlineSubjError(null);
-                        }}
-                        className="px-2.5 py-1 text-xs text-slate-600 hover:bg-slate-200/60 rounded-md transition-colors cursor-pointer"
-                      >
-                        Cancel
-                      </button>
-                      <button
-                        type="button"
-                        onClick={handleCreateInlineSubject}
-                        disabled={creatingInlineSubj}
-                        className="px-3 py-1 text-xs font-semibold text-white bg-brand-600 hover:bg-brand-700 disabled:opacity-50 rounded-md transition-colors shadow-xs inline-flex items-center gap-1 cursor-pointer"
-                      >
-                        {creatingInlineSubj ? 'Creating...' : 'Create & Link Subject'}
-                      </button>
-                    </div>
-                  </div>
-                )}
-
-                {inlineSubjSuccess && (
-                  <div className="mb-2 p-2 bg-emerald-50 border border-emerald-200 rounded-lg text-xs text-emerald-800 font-medium flex items-center justify-between">
-                    <span>{inlineSubjSuccess}</span>
-                    <button
-                      type="button"
-                      onClick={() => setInlineSubjSuccess(null)}
-                      className="text-emerald-600 hover:text-emerald-800 text-xs font-bold"
-                    >
-                      ✕
-                    </button>
-                  </div>
-                )}
-
-                {currentDeptSubjects.length === 0 ? (
-                  <div className="p-3 bg-amber-50 border border-amber-200 rounded-lg text-xs text-amber-800 flex items-start gap-2">
-                    <AlertTriangle className="w-4 h-4 text-amber-600 shrink-0 mt-0.5" />
-                    <div>
-                      <span>No active subjects found in the selected department. </span>
-                      <span>Click </span>
-                      <button
-                        type="button"
-                        onClick={() => setInlineSubjectOpen(true)}
-                        className="font-bold underline text-brand-700 cursor-pointer"
-                      >
-                        Add New Subject
-                      </button>
-                      <span> above or </span>
-                      <Link href="/subjects" className="font-bold underline text-brand-700">
-                        create subjects in Subject Master
-                      </Link>{' '}
-                      <span>before assigning qualifications.</span>
-                    </div>
-                  </div>
-                ) : (
-                  <div className="space-y-1.5 max-h-48 overflow-y-auto p-2 border border-slate-200 rounded-lg bg-slate-50/50">
-                    {currentDeptSubjects.map(subj => {
-                      const isChecked = selectedSubjectIds.includes(subj.subjectId);
-                      return (
-                        <label
-                          key={subj.subjectId}
-                          className={`flex items-center gap-2.5 p-2 rounded-md border text-xs cursor-pointer transition-colors ${
-                            isChecked
-                              ? 'bg-brand-50/70 border-brand-300'
-                              : 'bg-white border-slate-200 hover:bg-slate-50'
-                          }`}
-                        >
-                          <input
-                            type="checkbox"
-                            checked={isChecked}
-                            onChange={() => {
-                              setSelectedSubjectIds(prev =>
-                                isChecked
-                                  ? prev.filter(id => id !== subj.subjectId)
-                                  : [...prev, subj.subjectId]
-                              );
-                            }}
-                            className="rounded text-brand-600 focus:ring-brand-500"
-                          />
-                          <div className="flex-1 flex items-center justify-between min-w-0">
-                            <div className="truncate mr-2">
-                              <span className="font-bold text-slate-900">{subj.code}</span>
-                              <span className="ml-1.5 text-slate-700 font-medium">{subj.name}</span>
-                            </div>
-                            <div className="flex items-center gap-1.5 shrink-0">
-                              <span
-                                className={`px-1.5 py-0.2 rounded text-[10px] font-semibold ${
-                                  subj.type === 'Lab'
-                                    ? 'bg-amber-100 text-amber-800'
-                                    : 'bg-blue-100 text-blue-800'
-                                }`}
-                              >
-                                {subj.type}
-                              </span>
-                              <span className="text-[10px] text-slate-500 font-mono">
-                                {subj.weeklyHours}h/wk
-                              </span>
-                            </div>
-                          </div>
-                        </label>
-                      );
-                    })}
-                  </div>
-                )}
               </div>
 
               {/* Action Buttons */}

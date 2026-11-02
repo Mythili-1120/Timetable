@@ -10,8 +10,10 @@ import {
   Cpu,
   CalendarRange,
   History,
-  Settings
+  Settings,
+  LogOut
 } from 'lucide-react';
+import { useAuth } from '../lib/context/AuthContext';
 
 const NAV_ITEMS = [
   { label: 'Dashboard', href: '/', icon: LayoutDashboard },
@@ -25,6 +27,7 @@ const NAV_ITEMS = [
 
 export default function Sidebar() {
   const pathname = usePathname();
+  const { logout } = useAuth();
 
   return (
     <aside className="w-64 bg-slate-900 text-slate-300 flex flex-col shrink-0 border-r border-slate-800 no-print select-none">
@@ -63,8 +66,20 @@ export default function Sidebar() {
         })}
       </nav>
 
+      {/* Bottom Logout Navigation Item */}
+      <div className="p-3 border-t border-slate-800">
+        <button
+          type="button"
+          onClick={() => logout()}
+          className="w-full flex items-center gap-3 px-3 py-2.5 rounded-lg text-sm font-medium text-rose-400 hover:text-white hover:bg-rose-500/20 transition-colors cursor-pointer"
+        >
+          <LogOut className="w-4 h-4 shrink-0" />
+          <span>Logout</span>
+        </button>
+      </div>
+
       {/* Footer Info */}
-      <div className="p-3 border-t border-slate-800 text-[11px] text-slate-500">
+      <div className="p-3 border-t border-slate-800/60 text-[11px] text-slate-500">
         <p className="font-semibold text-slate-400">SSM Institute of Tech.</p>
         <p>Enterprise Edition v2.0</p>
       </div>

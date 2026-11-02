@@ -20,7 +20,13 @@ import {
   getCachedSubjects,
   createSubject,
   updateSubject,
-  archiveSubject
+  archiveSubject,
+  getSemestersForYear,
+  getSemesterNumber,
+  formatSemesterName,
+  getYearForSemester,
+  findDuplicateSubject,
+  YEAR_SEMESTERS
 } from '../../../../lib/services/subjectService';
 import {
   getAllClasses,
@@ -35,8 +41,6 @@ import {
   createAssignment,
   deleteAssignment,
   reassignStaff,
-  getSemestersForYear,
-  mapStaffToSubject,
   copyAssignmentsBetweenClasses
 } from '../../../../lib/services/assignmentService';
 import {
@@ -50,7 +54,9 @@ import {
   Subject,
   ClassSection,
   TeachingAssignment,
-  PublishedTimetable
+  PublishedTimetable,
+  UndergraduateYear,
+  SemesterDefinition
 } from '../../../../types';
 import { useAuth } from '../../../../lib/context/AuthContext';
 import DepartmentIcon from '../../../../components/DepartmentIcon';
@@ -136,8 +142,10 @@ export default function DepartmentDetailPage() {
   const [publishedTimetables, setPublishedTimetables] = useState<PublishedTimetable[]>(() => initialPub);
   const [draftStatusMap, setDraftStatusMap] = useState<Map<string, string>>(new Map());
 
-  // Year-wise Subjects drilldown state (Phase 4)
-  const [selectedSubjectYear, setSelectedSubjectYear] = useState<('1st Year' | '2nd Year' | '3rd Year' | '4th Year') | null>(null);
+  // Year-wise and Semester-wise Subjects drilldown state
+  const [selectedSubjectYear, setSelectedSubjectYear] = useState<UndergraduateYear | null>(null);
+  const [selectedSubjectSemester, setSelectedSubjectSemester] = useState<string>('Semester 1');
+  const [selectedSemesterTab, setSelectedSemesterTab] = useState<string>('Semester 1');
 
   // Staff Profile Popup modal state (Phase 3)
   const [selectedProfileStaff, setSelectedProfileStaff] = useState<Staff | null>(null);
@@ -165,8 +173,7 @@ export default function DepartmentDetailPage() {
   const [staffInitials, setStaffInitials] = useState('');
   const [staffEmail, setStaffEmail] = useState('');
   const [staffPhone, setStaffPhone] = useState('');
-  const [staffDesignation, setStaffDesignation] = useState('Assistant Professor');
-  const [staffSubjectIds, setStaffSubjectIds] = useState<string[]>([]);
+  const [staffDesignation, setStaffDesignation] = useState('');
   const [selectedExistingStaffId, setSelectedExistingStaffId] = useState('');
 
   const [subjectModalOpen, setSubjectModalOpen] = useState(false);
@@ -176,7 +183,9 @@ export default function DepartmentDetailPage() {
   const [subjType, setSubjType] = useState<'Theory' | 'Lab'>('Theory');
   const [subjHours, setSubjHours] = useState(4);
   const [subjLabBlock, setSubjLabBlock] = useState(4);
-  const [subjYearOfStudy, setSubjYearOfStudy] = useState<'1st Year' | '2nd Year' | '3rd Year' | '4th Year'>('1st Year');
+  const [subjYearOfStudy, setSubjYearOfStudy] = useState<UndergraduateYear>('1st Year');
+  const [subjSemester, setSubjSemester] = useState<string>('Semester 1');
+  const [subjAllowChangeSemester, setSubjAllowChangeSemester] = useState<boolean>(false);
 
   // Academic Years & Sections Modal (Phase 5: Student Strength completely eliminated)
   const [sectionModalOpen, setSectionModalOpen] = useState(false);
@@ -268,30 +277,12 @@ export default function DepartmentDetailPage() {
           setAssignHours(targetSubj.weeklyHours || 4);
         }
 
-        // Auto-select qualified faculty for target subject
-        const qualifiedFaculty = dStaff.filter(s => s.status === 'ACTIVE' && (s.subjectIds || []).includes(targetSubj.subjectId));
-        if (qualifiedFaculty.length === 1) {
-          setAssignMemberId(qualifiedFaculty[0].memberId);
-          setAutoMatchInfo({
-            type: 'STAFF',
-            message: `Auto-matched: ${qualifiedFaculty[0].displayName} is the only qualified faculty member for ${targetSubj.name}.`,
-            count: 1
-          });
-        } else if (qualifiedFaculty.length > 1) {
-          setAssignMemberId(qualifiedFaculty[0].memberId);
-          setAutoMatchInfo({
-            type: 'STAFF',
-            message: `${qualifiedFaculty.length} qualified active faculty members found. Select preferred faculty.`,
-            count: qualifiedFaculty.length
-          });
-        } else {
-          setAssignMemberId('');
-          setAutoMatchInfo({
-            type: 'NONE',
-            message: `No active faculty member is currently qualified for ${targetSubj.name}. Please edit a faculty member profile in Staff tab to add this subject first.`,
-            count: 0
-          });
+        // Select active faculty member if not already selected
+        const activeFaculty = dStaff.filter(s => s.status === 'ACTIVE');
+        if (activeFaculty.length > 0 && !assignMemberId) {
+          setAssignMemberId(activeFaculty[0].memberId);
         }
+        setAutoMatchInfo(null);
 
         if (tabParam === 'assignments' && subjIdParam) {
           setAssignModalOpen(true);
@@ -385,8 +376,7 @@ export default function DepartmentDetailPage() {
             initials: staffInitials.trim().toUpperCase(),
             email: staffEmail.trim().toLowerCase(),
             phone: staffPhone.trim(),
-            designation: staffDesignation.trim(),
-            subjectIds: staffSubjectIds
+            designation: staffDesignation.trim()
           },
           user.uid
         );
@@ -403,8 +393,7 @@ export default function DepartmentDetailPage() {
             email: staffEmail.trim().toLowerCase(),
             phone: staffPhone.trim(),
             designation: staffDesignation.trim(),
-            primaryDepartmentId: departmentId,
-            subjectIds: staffSubjectIds
+            primaryDepartmentId: departmentId
           },
           user.uid
         );
@@ -424,7 +413,7 @@ export default function DepartmentDetailPage() {
       setStaffInitials('');
       setStaffEmail('');
       setStaffPhone('');
-      setStaffSubjectIds([]);
+      setStaffDesignation('');
       setSelectedExistingStaffId('');
       await loadAll(true);
     } catch (err: any) {
@@ -482,8 +471,7 @@ export default function DepartmentDetailPage() {
     setStaffInitials(member.initials || '');
     setStaffEmail(member.email || '');
     setStaffPhone(member.phoneNumber || member.phone || '');
-    setStaffDesignation(member.designation || 'Assistant Professor');
-    setStaffSubjectIds(Array.isArray(member.subjectIds) ? member.subjectIds : []);
+    setStaffDesignation(member.designation || '');
     setModalError(null);
     setStaffModalOpen(true);
   };
@@ -495,20 +483,39 @@ export default function DepartmentDetailPage() {
     setStaffInitials('');
     setStaffEmail('');
     setStaffPhone('');
-    setStaffDesignation('Assistant Professor');
-    setStaffSubjectIds([]);
+    setStaffDesignation('');
     setModalError(null);
     setStaffModalOpen(true);
   };
 
   // -------------------------------------------------------------
-  // SUBJECT HANDLERS (Create / Edit / Archive)
+  // SUBJECT HANDLERS (Create / Edit / Archive / Quick Assign)
   // -------------------------------------------------------------
   const handleSaveSubject = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!user) return;
     if (!subjCode.trim() || !subjName.trim()) {
       setModalError('Subject code and title are required.');
+      return;
+    }
+
+    const cleanCode = subjCode.trim().toUpperCase();
+    const targetSemName = formatSemesterName(subjSemester);
+    const targetSemNum = getSemesterNumber(subjSemester);
+
+    // Required uniqueness check within applicable Department + Year + Semester scope
+    const duplicate = findDuplicateSubject(
+      subjects,
+      cleanCode,
+      departmentId,
+      subjYearOfStudy,
+      subjSemester,
+      editingSubject?.subjectId
+    );
+    if (duplicate) {
+      setModalError(
+        `Course code "${cleanCode}" already exists in ${subjYearOfStudy} — ${targetSemName} (${duplicate.name}). Please use a unique course code or edit the existing course.`
+      );
       return;
     }
 
@@ -519,26 +526,31 @@ export default function DepartmentDetailPage() {
         await updateSubject(
           editingSubject.subjectId,
           {
-            code: subjCode.toUpperCase().trim(),
+            code: cleanCode,
             name: subjName.trim(),
             type: subjType,
             weeklyHours: Number(subjHours),
             ...(subjType === 'Lab' ? { labBlockHours: Number(subjLabBlock) || 4 } : {}),
-            ...(subjYearOfStudy ? { yearOfStudy: subjYearOfStudy } : {})
+            ...(subjYearOfStudy ? { yearOfStudy: subjYearOfStudy } : {}),
+            semester: targetSemName,
+            semesterNumber: targetSemNum,
+            requiresSemesterReview: false
           },
           user.uid
         );
       } else {
         await createSubject(
           {
-            code: subjCode.trim().toUpperCase(),
+            code: cleanCode,
             name: subjName.trim(),
             type: subjType,
             weeklyHours: Number(subjHours),
             ...(subjType === 'Lab' ? { labBlockHours: Number(subjLabBlock) || 4 } : {}),
             departmentId,
             academicYear: '2025–2026',
-            ...(subjYearOfStudy ? { yearOfStudy: subjYearOfStudy } : {})
+            yearOfStudy: subjYearOfStudy,
+            semester: targetSemName,
+            semesterNumber: targetSemNum
           },
           user.uid
         );
@@ -554,6 +566,28 @@ export default function DepartmentDetailPage() {
     } catch (err: any) {
       console.error('Error saving subject:', err);
       setModalError(err?.message || 'Failed to save subject.');
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const handleQuickAssignSemester = async (subj: Subject, targetSemester: string) => {
+    if (!user) return;
+    setSaving(true);
+    try {
+      await updateSubject(
+        subj.subjectId,
+        {
+          semester: formatSemesterName(targetSemester),
+          semesterNumber: getSemesterNumber(targetSemester),
+          requiresSemesterReview: false
+        },
+        user.uid
+      );
+      await loadAll(true);
+    } catch (err: any) {
+      console.error('Error assigning semester:', err);
+      alert(`Failed to assign semester: ${err?.message || 'Permission denied'}`);
     } finally {
       setSaving(false);
     }
@@ -637,47 +671,39 @@ export default function DepartmentDetailPage() {
     const newClass = classes.find(c => c.classId === newClassId);
     if (!newClass) return;
 
-    // Filter available subjects for this cohort
-    const cohortSubjects = subjects.filter(s => !s.yearOfStudy || s.yearOfStudy === newClass.yearOfStudy);
+    const classSems = getSemestersForYear(newClass.yearOfStudy);
+    let targetSem = assignSemester;
+    if (!classSems.some(s => s.name === targetSem)) {
+      targetSem = classSems[0].name;
+      setAssignSemester(targetSem);
+    }
+
+    // Filter available subjects for this cohort and semester
+    const cohortSubjects = subjects.filter(
+      s => (!s.yearOfStudy || s.yearOfStudy === newClass.yearOfStudy) &&
+           (!s.semester || s.semester === targetSem || s.semesterNumber === getSemesterNumber(targetSem))
+    );
     const availableSubjs = cohortSubjects.length > 0 ? cohortSubjects : subjects;
 
     // Retain current subject if it belongs to this cohort, else default to first cohort subject
     const isCurrentInCohort = cohortSubjects.some(s => s.subjectId === assignSubjId);
-    let targetSubjId = assignSubjId;
     if (!isCurrentInCohort && availableSubjs.length > 0) {
-      targetSubjId = availableSubjs[0].subjectId;
-      setAssignSubjId(targetSubjId);
+      setAssignSubjId(availableSubjs[0].subjectId);
       setAssignHours(availableSubjs[0].weeklyHours);
     }
+  };
 
-    if (targetSubjId) {
-      const pool = showCrossDeptStaff ? allCollegeStaff : deptStaff;
-      const qualifiedFaculty = pool.filter(s => s.status === 'ACTIVE' && (s.subjectIds || []).includes(targetSubjId));
-      if (qualifiedFaculty.length === 1) {
-        setAssignMemberId(qualifiedFaculty[0].memberId);
-        setAutoMatchInfo({
-          type: 'STAFF',
-          message: `Auto-matched: ${qualifiedFaculty[0].displayName} is the only qualified active faculty member for this course.`,
-          count: 1
-        });
-      } else if (qualifiedFaculty.length > 1) {
-        if (!qualifiedFaculty.some(s => s.memberId === assignMemberId)) {
-          setAssignMemberId(qualifiedFaculty[0].memberId);
-        }
-        setAutoMatchInfo({
-          type: 'STAFF',
-          message: `${qualifiedFaculty.length} qualified active faculty members found for ${newClass.yearOfStudy}.`,
-          count: qualifiedFaculty.length
-        });
-      } else {
-        setAssignMemberId('');
-        const subj = subjects.find(s => s.subjectId === targetSubjId);
-        setAutoMatchInfo({
-          type: 'NONE',
-          message: `No active faculty member is currently qualified for ${subj ? subj.name : 'this course'} in ${newClass.yearOfStudy}. Please add this qualification in Staff tab first.`,
-          count: 0
-        });
-      }
+  const handleAssignSemesterChange = (newSem: string) => {
+    setAssignSemester(newSem);
+    setModalError(null);
+    const selClass = classes.find(c => c.classId === assignClassId);
+    const cohortSubjects = subjects.filter(
+      s => (!selClass || !s.yearOfStudy || s.yearOfStudy === selClass.yearOfStudy) &&
+           (!s.semester || s.semester === newSem || s.semesterNumber === getSemesterNumber(newSem))
+    );
+    const availableSubjs = cohortSubjects.length > 0 ? cohortSubjects : subjects;
+    if (availableSubjs.length > 0 && !cohortSubjects.some(s => s.subjectId === assignSubjId)) {
+      handleAssignSubjectChange(availableSubjs[0].subjectId);
     }
   };
 
@@ -688,130 +714,16 @@ export default function DepartmentDetailPage() {
     if (subj) {
       setAssignHours(subj.weeklyHours);
     }
-
-    const pool = showCrossDeptStaff ? allCollegeStaff : deptStaff;
-    const qualifiedFaculty = pool.filter(s => s.status === 'ACTIVE' && (s.subjectIds || []).includes(newSubjId));
-
-    if (qualifiedFaculty.length === 1) {
-      const single = qualifiedFaculty[0];
-      setAssignMemberId(single.memberId);
-      setAutoMatchInfo({
-        type: 'STAFF',
-        message: `Auto-matched: ${single.displayName} is the only qualified active faculty member for this course.`,
-        count: 1
-      });
-    } else if (qualifiedFaculty.length > 1) {
-      const currentlyQualified = qualifiedFaculty.some(s => s.memberId === assignMemberId);
-      if (!currentlyQualified) {
-        setAssignMemberId(qualifiedFaculty[0].memberId);
-      }
-      setAutoMatchInfo({
-        type: 'STAFF',
-        message: `${qualifiedFaculty.length} qualified active faculty members found. Qualified faculty prioritized in dropdown.`,
-        count: qualifiedFaculty.length
-      });
-    } else {
-      setAssignMemberId('');
-      setAutoMatchInfo({
-        type: 'NONE',
-        message: `No active faculty member is currently qualified for ${subj ? `${subj.code} — ${subj.name}` : 'this course'}. Please add this subject to a faculty member's Qualified Subjects in the Staff tab first.`,
-        count: 0
-      });
-    }
   };
 
   const handleAssignFacultyChange = (newMemberId: string) => {
     setAssignMemberId(newMemberId);
     setModalError(null);
-    const pool = showCrossDeptStaff ? allCollegeStaff : deptStaff;
-    const faculty = pool.find(s => s.memberId === newMemberId) || allCollegeStaff.find(s => s.memberId === newMemberId);
-    if (!faculty) return;
-
-    const qualifiedSubjIds = faculty.subjectIds || [];
-    const selectedClass = classes.find(c => c.classId === assignClassId);
-
-    // Cohort subjects for this section
-    const cohortSubjects = selectedClass
-      ? subjects.filter(s => !s.yearOfStudy || s.yearOfStudy === selectedClass.yearOfStudy)
-      : subjects;
-    const availableSubjs = cohortSubjects.length > 0 ? cohortSubjects : subjects;
-
-    const matchingSubjects = availableSubjs.filter(s => qualifiedSubjIds.includes(s.subjectId));
-
-    if (matchingSubjects.length === 1) {
-      const singleSubj = matchingSubjects[0];
-      setAssignSubjId(singleSubj.subjectId);
-      setAssignHours(singleSubj.weeklyHours);
-      setAutoMatchInfo({
-        type: 'SUBJECT',
-        message: `Auto-matched: ${faculty.displayName} is qualified for ${singleSubj.code} — ${singleSubj.name}.`,
-        count: 1
-      });
-    } else if (matchingSubjects.length > 1) {
-      const isCurrentMatching = matchingSubjects.some(s => s.subjectId === assignSubjId);
-      if (!isCurrentMatching) {
-        setAssignSubjId(matchingSubjects[0].subjectId);
-        setAssignHours(matchingSubjects[0].weeklyHours);
-      }
-      setAutoMatchInfo({
-        type: 'SUBJECT',
-        message: `${faculty.displayName} is qualified for ${matchingSubjects.length} subjects in this cohort. Select course below.`,
-        count: matchingSubjects.length
-      });
-    } else {
-      // Check if qualified for subjects in other years of this department
-      const deptMatches = subjects.filter(s => qualifiedSubjIds.includes(s.subjectId));
-      if (deptMatches.length > 0) {
-        setAutoMatchInfo({
-          type: 'NONE',
-          message: `${faculty.displayName} is qualified for ${deptMatches.length} subject(s) in other cohorts (${deptMatches.map(s => s.code).join(', ')}), but none in ${selectedClass?.yearOfStudy || 'this section'}.`,
-          count: 0
-        });
-      } else {
-        setAutoMatchInfo({
-          type: 'NONE',
-          message: `${faculty.displayName} has no qualified subjects configured. Update their profile in the Staff tab to add qualifications.`,
-          count: 0
-        });
-      }
-    }
   };
 
   const handleToggleCrossDept = () => {
-    const nextVal = !showCrossDeptStaff;
-    setShowCrossDeptStaff(nextVal);
+    setShowCrossDeptStaff(!showCrossDeptStaff);
     setModalError(null);
-
-    const pool = nextVal ? allCollegeStaff : deptStaff;
-    const qualifiedFaculty = pool.filter(s => s.status === 'ACTIVE' && (s.subjectIds || []).includes(assignSubjId));
-
-    if (qualifiedFaculty.length === 1) {
-      const single = qualifiedFaculty[0];
-      setAssignMemberId(single.memberId);
-      const isCross = single.primaryDepartmentId !== departmentId;
-      setAutoMatchInfo({
-        type: 'STAFF',
-        message: `Auto-matched: ${single.displayName}${isCross ? ` (${single.primaryDepartmentId.replace('dept-', '').toUpperCase()})` : ''} is qualified for this course.`,
-        count: 1
-      });
-    } else if (qualifiedFaculty.length > 1) {
-      if (!qualifiedFaculty.some(s => s.memberId === assignMemberId)) {
-        setAssignMemberId(qualifiedFaculty[0].memberId);
-      }
-      setAutoMatchInfo({
-        type: 'STAFF',
-        message: `${qualifiedFaculty.length} qualified faculty members found across departments.`,
-        count: qualifiedFaculty.length
-      });
-    } else {
-      setAssignMemberId('');
-      const subj = subjects.find(s => s.subjectId === assignSubjId);
-      setAutoMatchInfo({
-        type: 'NONE',
-        message: `No active faculty member found across departments qualified for ${subj ? subj.name : 'this course'}.`,
-        count: 0
-      });
-    }
   };
 
   const openMapFacultyModal = (initialClassId?: string, initialSubjId?: string, initialMemberId?: string) => {
@@ -851,50 +763,23 @@ export default function DepartmentDetailPage() {
     const targetSubj = subjects.find(s => s.subjectId === targetSubjId) || availableSubjs[0];
     setAssignHours(targetSubj?.weeklyHours || 4);
 
-    // 3. Faculty & Auto-Matching
+    // 3. Faculty selection
     setShowCrossDeptStaff(false);
     setModalError(null);
 
     if (initialMemberId) {
       setAssignMemberId(initialMemberId);
-      setAutoMatchInfo(null);
     } else {
-      const qualifiedFaculty = deptStaff.filter(s => s.status === 'ACTIVE' && (s.subjectIds || []).includes(targetSubjId));
-      if (qualifiedFaculty.length === 1) {
-        setAssignMemberId(qualifiedFaculty[0].memberId);
-        setAutoMatchInfo({
-          type: 'STAFF',
-          message: `Auto-matched: ${qualifiedFaculty[0].displayName} is the only qualified active faculty member for ${targetSubj.name}.`,
-          count: 1
-        });
-      } else if (qualifiedFaculty.length > 1) {
-        setAssignMemberId(qualifiedFaculty[0].memberId);
-        setAutoMatchInfo({
-          type: 'STAFF',
-          message: `${qualifiedFaculty.length} qualified active faculty members found. Select preferred faculty below.`,
-          count: qualifiedFaculty.length
-        });
+      const activeDeptStaff = deptStaff.filter(s => s.status === 'ACTIVE');
+      if (activeDeptStaff.length > 0) {
+        setAssignMemberId(activeDeptStaff[0].memberId);
       } else {
-        // Check if cross-department qualified faculty exist
-        const crossQualified = allCollegeStaff.filter(s => s.status === 'ACTIVE' && (s.subjectIds || []).includes(targetSubjId));
-        if (crossQualified.length > 0) {
-          setAssignMemberId('');
-          setAutoMatchInfo({
-            type: 'NONE',
-            message: `No faculty in ${department.name} is currently qualified for ${targetSubj.name}, but ${crossQualified.length} qualified faculty member(s) exist in other departments. Click "+ Find Faculty from Other Departments" to view them.`,
-            count: 0
-          });
-        } else {
-          setAssignMemberId('');
-          setAutoMatchInfo({
-            type: 'NONE',
-            message: `No active faculty member is currently qualified for ${targetSubj.name}. Please edit a faculty member profile in Staff tab to add this subject first.`,
-            count: 0
-          });
-        }
+        const activeCollegeStaff = allCollegeStaff.filter(s => s.status === 'ACTIVE');
+        setAssignMemberId(activeCollegeStaff[0]?.memberId || '');
       }
     }
 
+    setAutoMatchInfo(null);
     setAssignModalOpen(true);
   };
 
@@ -916,14 +801,6 @@ export default function DepartmentDetailPage() {
     }
     if (!selectedFaculty) {
       setModalError('Selected faculty member could not be found.');
-      return;
-    }
-
-    // ELIMINATE SILENT MUTATION:
-    // Verify that the faculty member is actually qualified for this subject
-    const isQualified = (selectedFaculty.subjectIds || []).includes(assignSubjId);
-    if (!isQualified) {
-      setModalError(`${selectedFaculty.displayName} (${selectedFaculty.memberId}) is not qualified to teach ${selectedSubj.name}. Please edit their profile in the Staff directory to add this qualification first.`);
       return;
     }
 
@@ -1015,12 +892,30 @@ export default function DepartmentDetailPage() {
       s.displayName.toLowerCase().includes(staffSearch.toLowerCase())
   );
 
-  // Subject filtering for Year-wise drilldown
+  // Subject filtering for Year + Semester drilldown
   const subjectsForActiveYear = selectedSubjectYear
     ? subjects.filter(s => s.yearOfStudy === selectedSubjectYear)
     : subjects;
 
-  const filteredSubjects = subjectsForActiveYear.filter(s => {
+  const activeYearSemesters = selectedSubjectYear ? getSemestersForYear(selectedSubjectYear) : [];
+  const unassignedActiveYearSubjects = selectedSubjectYear
+    ? subjectsForActiveYear.filter(s => s.requiresSemesterReview || (!s.semester && s.semesterNumber === undefined))
+    : [];
+
+  const subjectsForActiveSemester = selectedSubjectYear
+    ? selectedSemesterTab === 'REVIEW'
+      ? unassignedActiveYearSubjects
+      : subjectsForActiveYear.filter(s => {
+          const targetSemNum = getSemesterNumber(selectedSemesterTab);
+          const targetSemName = formatSemesterName(selectedSemesterTab);
+          return (
+            (s.semester && s.semester === targetSemName) ||
+            (s.semesterNumber !== undefined && s.semesterNumber === targetSemNum)
+          );
+        })
+    : subjects;
+
+  const filteredSubjects = subjectsForActiveSemester.filter(s => {
     return (
       s.name.toLowerCase().includes(subjectSearch.toLowerCase()) ||
       s.code.toLowerCase().includes(subjectSearch.toLowerCase())
@@ -1596,7 +1491,7 @@ export default function DepartmentDetailPage() {
       )}
 
       {/* ========================================================= */}
-      {/* 5. TAB 3: SUBJECTS (YEAR-WISE SUBJECT MANAGEMENT)          */}
+      {/* 5. TAB 3: SUBJECTS (YEAR + SEMESTER-WISE SUBJECT WORKSPACE)*/}
       {/* ========================================================= */}
       {activeTab === 'subjects' && (
         <div className="space-y-4">
@@ -1608,7 +1503,7 @@ export default function DepartmentDetailPage() {
                     Academic Year Curriculum & Subjects
                   </h2>
                   <p className="text-xs text-slate-500 mt-0.5">
-                    Select an academic year level to view, add, or edit curriculum courses
+                    Select an academic year level to view, add, or edit curriculum courses by semester
                   </p>
                 </div>
 
@@ -1620,6 +1515,8 @@ export default function DepartmentDetailPage() {
                     setSubjHours(4);
                     setSubjLabBlock(4);
                     setSubjYearOfStudy('1st Year');
+                    setSubjSemester('Semester 1');
+                    setSubjAllowChangeSemester(false);
                     setModalError(null);
                     setSubjectModalOpen(true);
                   }}
@@ -1633,9 +1530,11 @@ export default function DepartmentDetailPage() {
               {/* 4 Academic Year Level Cards */}
               <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-4 gap-4">
                 {UNDERGRADUATE_YEARS.map((yr, idx) => {
+                  const sems = getSemestersForYear(yr);
                   const yearSubjs = subjects.filter(s => s.yearOfStudy === yr && s.status !== 'INACTIVE');
-                  const theoryCount = yearSubjs.filter(s => s.type === 'Theory').length;
-                  const labCount = yearSubjs.filter(s => s.type === 'Lab').length;
+                  const sem1Subjs = yearSubjs.filter(s => s.semester === sems[0].name || s.semesterNumber === sems[0].number);
+                  const sem2Subjs = yearSubjs.filter(s => s.semester === sems[1].name || s.semesterNumber === sems[1].number);
+                  const unassignedSubjs = yearSubjs.filter(s => s.requiresSemesterReview || (!s.semester && s.semesterNumber === undefined));
                   const totalHours = yearSubjs.reduce((sum, s) => sum + (s.weeklyHours || 0), 0);
 
                   return (
@@ -1644,7 +1543,7 @@ export default function DepartmentDetailPage() {
                       className="bg-white border border-[#E3E5F0] rounded-2xl p-5 shadow-xs hover:border-[#3431B7] transition-all flex flex-col justify-between group"
                     >
                       <div>
-                        <div className="flex items-center justify-between mb-4">
+                        <div className="flex items-center justify-between mb-3">
                           <div className="w-10 h-10 rounded-xl bg-[#28229E] text-white flex items-center justify-center font-black text-sm shrink-0">
                             {idx + 1}
                           </div>
@@ -1656,28 +1555,47 @@ export default function DepartmentDetailPage() {
                         <h3 className="text-base font-extrabold text-slate-900 mb-1 group-hover:text-[#3431B7] transition-colors">
                           {yr}
                         </h3>
-                        <p className="text-xs text-slate-500 mb-4">
-                          {yearSubjs.length} configured {yearSubjs.length === 1 ? 'subject' : 'subjects'}
+                        <p className="text-xs text-slate-500 mb-3">
+                          {yearSubjs.length} configured {yearSubjs.length === 1 ? 'course' : 'courses'} across 2 semesters
                         </p>
 
-                        <div className="p-3 rounded-xl bg-[#F4F5FB] border border-[#E3E5F0] space-y-1.5 mb-4 text-xs">
-                          <div className="flex justify-between text-slate-600">
-                            <span>Theory Courses:</span>
-                            <span className="font-bold text-slate-900">{theoryCount}</span>
+                        {/* Semester Breakdown Box */}
+                        <div className="p-3 rounded-xl bg-[#F4F5FB] border border-[#E3E5F0] space-y-2 mb-4 text-xs">
+                          <div className="flex items-center justify-between">
+                            <span className="font-semibold text-slate-700">{sems[0].name}:</span>
+                            <span className="font-bold text-slate-900">
+                              {sem1Subjs.length} courses ({sem1Subjs.reduce((acc, s) => acc + (s.weeklyHours || 0), 0)} hrs)
+                            </span>
                           </div>
-                          <div className="flex justify-between text-slate-600">
-                            <span>Laboratory Courses:</span>
-                            <span className="font-bold text-slate-900">{labCount}</span>
+                          <div className="flex items-center justify-between">
+                            <span className="font-semibold text-slate-700">{sems[1].name}:</span>
+                            <span className="font-bold text-slate-900">
+                              {sem2Subjs.length} courses ({sem2Subjs.reduce((acc, s) => acc + (s.weeklyHours || 0), 0)} hrs)
+                            </span>
                           </div>
+
+                          {unassignedSubjs.length > 0 && (
+                            <div className="pt-1.5 border-t border-amber-200/60 flex items-center justify-between text-amber-700 font-bold">
+                              <span className="flex items-center gap-1">
+                                <AlertTriangle className="w-3.5 h-3.5 text-amber-600 shrink-0" />
+                                <span>Needs Review:</span>
+                              </span>
+                              <span>{unassignedSubjs.length} unassigned</span>
+                            </div>
+                          )}
                         </div>
                       </div>
 
                       <div className="space-y-2 pt-2 border-t border-slate-100">
                         <button
-                          onClick={() => setSelectedSubjectYear(yr)}
+                          onClick={() => {
+                            setSelectedSubjectYear(yr);
+                            setSelectedSubjectSemester(sems[0].name);
+                            setSelectedSemesterTab(sems[0].name);
+                          }}
                           className="w-full inline-flex items-center justify-center gap-1.5 py-2.5 px-3 rounded-xl text-xs font-bold text-white bg-[#3431B7] hover:bg-[#28229E] transition-colors cursor-pointer shadow-xs"
                         >
-                          <span>View {yr} Subjects</span>
+                          <span>View {yr} Semesters & Subjects</span>
                           <ChevronRight className="w-4 h-4" />
                         </button>
 
@@ -1689,6 +1607,8 @@ export default function DepartmentDetailPage() {
                             setSubjHours(4);
                             setSubjLabBlock(4);
                             setSubjYearOfStudy(yr);
+                            setSubjSemester(sems[0].name);
+                            setSubjAllowChangeSemester(false);
                             setModalError(null);
                             setSubjectModalOpen(true);
                           }}
@@ -1705,10 +1625,14 @@ export default function DepartmentDetailPage() {
             </div>
           ) : (
             <div className="space-y-4">
+              {/* Header Bar with Back Button, Title, Search, and Add Subject */}
               <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
                 <div className="flex items-center gap-3">
                   <button
-                    onClick={() => setSelectedSubjectYear(null)}
+                    onClick={() => {
+                      setSelectedSubjectYear(null);
+                      setSubjectSearch('');
+                    }}
                     className="inline-flex items-center gap-1.5 px-3 py-2 rounded-xl text-xs font-bold text-[#3431B7] bg-[#EEF0FA] hover:bg-[#E0E4F7] transition-colors cursor-pointer"
                   >
                     <ArrowLeft className="w-4 h-4" />
@@ -1717,10 +1641,10 @@ export default function DepartmentDetailPage() {
 
                   <div>
                     <h2 className="text-xl font-extrabold text-slate-900 tracking-tight">
-                      {selectedSubjectYear} Subjects
+                      {selectedSubjectYear} Curriculum & Subjects
                     </h2>
                     <p className="text-xs text-slate-500">
-                      Curriculum subjects and lab courses for {selectedSubjectYear} students
+                      Manage Semester-wise courses for {department.name} ({department.code})
                     </p>
                   </div>
                 </div>
@@ -1745,101 +1669,267 @@ export default function DepartmentDetailPage() {
                       setSubjHours(4);
                       setSubjLabBlock(4);
                       setSubjYearOfStudy(selectedSubjectYear);
+                      setSubjSemester(
+                        selectedSemesterTab !== 'REVIEW'
+                          ? selectedSemesterTab
+                          : activeYearSemesters[0]?.name || 'Semester 1'
+                      );
+                      setSubjAllowChangeSemester(false);
                       setModalError(null);
                       setSubjectModalOpen(true);
                     }}
                     className="inline-flex items-center gap-1.5 px-3.5 py-2 rounded-xl text-xs font-bold text-white bg-[#3431B7] hover:bg-[#28229E] transition-colors shadow-xs cursor-pointer shrink-0"
                   >
                     <Plus className="w-4 h-4" />
-                    <span>Add Subject to {selectedSubjectYear}</span>
+                    <span>
+                      Add Subject to {selectedSemesterTab !== 'REVIEW' ? selectedSemesterTab : activeYearSemesters[0]?.name}
+                    </span>
                   </button>
                 </div>
               </div>
 
-              {/* Year Scoped Subjects Table */}
-              <div className="bg-white rounded-xl border border-slate-200 overflow-hidden shadow-xs">
-                <div className="overflow-x-auto">
-                  <table className="w-full text-left text-sm">
-                    <thead className="bg-slate-50 text-slate-600 text-xs font-semibold uppercase tracking-wider border-b border-slate-200">
-                      <tr>
-                        <th className="py-3 px-4">Subject ID</th>
-                        <th className="py-3 px-4">Code</th>
-                        <th className="py-3 px-4">Course Title</th>
-                        <th className="py-3 px-4">Type</th>
-                        <th className="py-3 px-4">Weekly Hours</th>
-                        <th className="py-3 px-4">Status</th>
-                        <th className="py-3 px-4 text-right">Actions</th>
-                      </tr>
-                    </thead>
-                    <tbody className="divide-y divide-slate-100">
-                      {filteredSubjects.length === 0 ? (
+              {/* SEMESTER TABS */}
+              <div className="bg-white rounded-2xl border border-slate-200 p-1.5 shadow-2xs">
+                <div className="flex items-center justify-between flex-wrap gap-2">
+                  <div className="flex items-center gap-1.5">
+                    {activeYearSemesters.map((sem) => {
+                      const semCount = subjectsForActiveYear.filter(
+                        s => s.status !== 'INACTIVE' && (s.semester === sem.name || s.semesterNumber === sem.number)
+                      ).length;
+                      const isSelected = selectedSemesterTab === sem.name;
+
+                      return (
+                        <button
+                          key={sem.name}
+                          type="button"
+                          onClick={() => {
+                            setSelectedSemesterTab(sem.name);
+                            setSelectedSubjectSemester(sem.name);
+                          }}
+                          className={`flex items-center gap-2 px-4 py-2 rounded-xl text-xs font-bold transition-all cursor-pointer ${
+                            isSelected
+                              ? 'bg-[#3431B7] text-white shadow-xs'
+                              : 'text-slate-600 hover:text-slate-900 hover:bg-slate-100'
+                          }`}
+                        >
+                          <span>{sem.name}</span>
+                          <span
+                            className={`px-2 py-0.5 rounded-full text-[11px] font-bold ${
+                              isSelected ? 'bg-white/20 text-white' : 'bg-slate-200 text-slate-700'
+                            }`}
+                          >
+                            {semCount}
+                          </span>
+                        </button>
+                      );
+                    })}
+
+                    {unassignedActiveYearSubjects.length > 0 && (
+                      <button
+                        type="button"
+                        onClick={() => setSelectedSemesterTab('REVIEW')}
+                        className={`flex items-center gap-1.5 px-3.5 py-2 rounded-xl text-xs font-bold transition-all cursor-pointer ${
+                          selectedSemesterTab === 'REVIEW'
+                            ? 'bg-amber-600 text-white shadow-xs'
+                            : 'bg-amber-50 text-amber-800 border border-amber-200 hover:bg-amber-100'
+                        }`}
+                      >
+                        <AlertTriangle className="w-3.5 h-3.5 shrink-0" />
+                        <span>Needs Review</span>
+                        <span
+                          className={`px-2 py-0.5 rounded-full text-[11px] font-bold ${
+                            selectedSemesterTab === 'REVIEW' ? 'bg-white/20 text-white' : 'bg-amber-200 text-amber-900'
+                          }`}
+                        >
+                          {unassignedActiveYearSubjects.length}
+                        </span>
+                      </button>
+                    )}
+                  </div>
+
+                  <div className="text-xs text-slate-500 font-medium px-3">
+                    Active Scope: <strong className="text-slate-800">{selectedSubjectYear} — {selectedSemesterTab !== 'REVIEW' ? selectedSemesterTab : 'Unassigned Review'}</strong>
+                  </div>
+                </div>
+              </div>
+
+              {/* REVIEW TAB CONTENT (If 'REVIEW' is selected) */}
+              {selectedSemesterTab === 'REVIEW' && (
+                <div className="bg-amber-50/70 border border-amber-200 rounded-2xl p-5 space-y-4">
+                  <div className="flex items-start gap-3">
+                    <div className="w-9 h-9 rounded-xl bg-amber-500 text-white flex items-center justify-center shrink-0">
+                      <AlertTriangle className="w-5 h-5" />
+                    </div>
+                    <div>
+                      <h4 className="text-sm font-bold text-amber-950">
+                        Semester Assignment Required ({unassignedActiveYearSubjects.length} {unassignedActiveYearSubjects.length === 1 ? 'Course' : 'Courses'})
+                      </h4>
+                      <p className="text-xs text-amber-800 mt-0.5 leading-relaxed">
+                        These courses are part of {selectedSubjectYear} curriculum but have not yet been assigned to a specific semester. Assign each course to its correct semester below:
+                      </p>
+                    </div>
+                  </div>
+
+                  <div className="bg-white rounded-xl border border-amber-200 overflow-hidden shadow-2xs">
+                    <table className="w-full text-left text-sm">
+                      <thead className="bg-slate-50 text-slate-600 text-xs font-semibold uppercase tracking-wider border-b border-slate-200">
                         <tr>
-                          <td colSpan={7} className="py-8 text-center text-slate-500 text-xs">
-                            No subjects configured for {selectedSubjectYear}. Click "Add Subject to {selectedSubjectYear}" to create courses.
-                          </td>
+                          <th className="py-2.5 px-4">Subject ID</th>
+                          <th className="py-2.5 px-4">Code</th>
+                          <th className="py-2.5 px-4">Course Title</th>
+                          <th className="py-2.5 px-4">Type</th>
+                          <th className="py-2.5 px-4">Weekly Hours</th>
+                          <th className="py-2.5 px-4 text-right">Assign Semester</th>
                         </tr>
-                      ) : (
-                        filteredSubjects.map((s) => (
-                          <tr key={s.subjectId} className="hover:bg-slate-50/60 transition-colors">
-                            <td className="py-3 px-4 font-mono text-xs text-slate-500">{s.subjectId}</td>
-                            <td className="py-3 px-4 font-bold text-slate-900">{s.code}</td>
-                            <td className="py-3 px-4 font-semibold text-slate-800">{s.name}</td>
-                            <td className="py-3 px-4">
-                              <span
-                                className={`px-2 py-0.5 rounded-md text-xs font-bold ${
-                                  s.type === 'Lab'
-                                    ? 'bg-amber-50 text-amber-700 border border-amber-200'
-                                    : 'bg-blue-50 text-blue-700 border border-blue-200'
-                                }`}
-                              >
-                                {s.type} {s.type === 'Lab' && s.labBlockHours ? `(${s.labBlockHours}h block)` : ''}
-                              </span>
+                      </thead>
+                      <tbody className="divide-y divide-slate-100">
+                        {unassignedActiveYearSubjects.map((s) => (
+                          <tr key={s.subjectId} className="hover:bg-slate-50/60">
+                            <td className="py-2.5 px-4 font-mono text-xs text-slate-500">{s.subjectId}</td>
+                            <td className="py-2.5 px-4 font-bold text-slate-900">{s.code}</td>
+                            <td className="py-2.5 px-4 font-semibold text-slate-800">{s.name}</td>
+                            <td className="py-2.5 px-4 text-xs font-semibold">{s.type}</td>
+                            <td className="py-2.5 px-4 text-xs font-bold text-slate-700">{s.weeklyHours} hrs</td>
+                            <td className="py-2.5 px-4 text-right space-x-2">
+                              {activeYearSemesters.map((sem) => (
+                                <button
+                                  key={sem.name}
+                                  type="button"
+                                  disabled={saving}
+                                  onClick={() => handleQuickAssignSemester(s, sem.name)}
+                                  className="inline-flex items-center gap-1 px-3 py-1.5 rounded-lg text-xs font-bold text-white bg-[#3431B7] hover:bg-[#28229E] transition-colors cursor-pointer shadow-2xs disabled:opacity-50"
+                                >
+                                  <Check className="w-3.5 h-3.5" />
+                                  <span>Assign to {sem.name}</span>
+                                </button>
+                              ))}
                             </td>
-                            <td className="py-3 px-4 font-bold text-slate-700">{s.weeklyHours} hrs</td>
-                            <td className="py-3 px-4">
-                              <span
-                                className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-semibold ${
-                                  s.status === 'ACTIVE'
-                                    ? 'bg-emerald-50 text-emerald-700 border border-emerald-200'
-                                    : 'bg-slate-100 text-slate-500 border border-slate-200'
-                                }`}
-                              >
-                                {s.status}
-                              </span>
-                            </td>
-                            <td className="py-3 px-4 text-right space-x-1.5">
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                </div>
+              )}
+
+              {/* REGULAR SEMESTER SUBJECTS TABLE */}
+              {selectedSemesterTab !== 'REVIEW' && (
+                <div className="bg-white rounded-xl border border-slate-200 overflow-hidden shadow-xs">
+                  <div className="overflow-x-auto">
+                    <table className="w-full text-left text-sm">
+                      <thead className="bg-slate-50 text-slate-600 text-xs font-semibold uppercase tracking-wider border-b border-slate-200">
+                        <tr>
+                          <th className="py-3 px-4">Subject ID</th>
+                          <th className="py-3 px-4">Code</th>
+                          <th className="py-3 px-4">Course Title</th>
+                          <th className="py-3 px-4">Semester</th>
+                          <th className="py-3 px-4">Type</th>
+                          <th className="py-3 px-4">Weekly Hours</th>
+                          <th className="py-3 px-4">Status</th>
+                          <th className="py-3 px-4 text-right">Actions</th>
+                        </tr>
+                      </thead>
+                      <tbody className="divide-y divide-slate-100">
+                        {filteredSubjects.length === 0 ? (
+                          <tr>
+                            <td colSpan={8} className="py-12 text-center text-slate-500 text-xs">
+                              <BookOpen className="w-8 h-8 text-slate-300 mx-auto mb-2" />
+                              <p className="font-semibold text-slate-700">
+                                No subjects configured for {selectedSubjectYear} — {selectedSemesterTab}.
+                              </p>
+                              <p className="text-slate-400 mt-0.5 mb-3">
+                                Create courses for this semester using the button below.
+                              </p>
                               <button
                                 onClick={() => {
-                                  setEditingSubject(s);
-                                  setSubjCode(s.code);
-                                  setSubjName(s.name);
-                                  setSubjType(s.type);
-                                  setSubjHours(s.weeklyHours);
-                                  setSubjLabBlock(s.labBlockHours || 4);
-                                  setSubjYearOfStudy(s.yearOfStudy || selectedSubjectYear);
+                                  setEditingSubject(null);
+                                  setSubjCode('');
+                                  setSubjName('');
+                                  setSubjHours(4);
+                                  setSubjLabBlock(4);
+                                  setSubjYearOfStudy(selectedSubjectYear);
+                                  setSubjSemester(selectedSemesterTab);
+                                  setSubjAllowChangeSemester(false);
                                   setModalError(null);
                                   setSubjectModalOpen(true);
                                 }}
-                                className="p-1.5 text-slate-400 hover:text-[#3431B7] hover:bg-slate-100 rounded-md transition-colors cursor-pointer"
-                                title="Edit Subject"
+                                className="inline-flex items-center gap-1.5 px-3.5 py-2 rounded-xl text-xs font-bold text-white bg-[#3431B7] hover:bg-[#28229E] transition-colors shadow-xs cursor-pointer"
                               >
-                                <Edit2 className="w-4 h-4" />
-                              </button>
-                              <button
-                                onClick={() => handleToggleSubjectStatus(s)}
-                                className="p-1.5 text-slate-400 hover:text-amber-600 hover:bg-slate-100 rounded-md transition-colors cursor-pointer"
-                                title={s.status === 'ACTIVE' ? 'Archive Subject' : 'Reactivate'}
-                              >
-                                <Archive className="w-4 h-4" />
+                                <Plus className="w-4 h-4" />
+                                <span>Add Subject to {selectedSemesterTab}</span>
                               </button>
                             </td>
                           </tr>
-                        ))
-                      )}
-                    </tbody>
-                  </table>
+                        ) : (
+                          filteredSubjects.map((s) => (
+                            <tr key={s.subjectId} className="hover:bg-slate-50/60 transition-colors">
+                              <td className="py-3 px-4 font-mono text-xs text-slate-500">{s.subjectId}</td>
+                              <td className="py-3 px-4 font-bold text-slate-900">{s.code}</td>
+                              <td className="py-3 px-4 font-semibold text-slate-800">{s.name}</td>
+                              <td className="py-3 px-4">
+                                <span className="inline-flex items-center px-2 py-0.5 rounded text-xs font-semibold bg-indigo-50 text-indigo-700 border border-indigo-200">
+                                  {s.semester || (s.semesterNumber ? `Semester ${s.semesterNumber}` : 'Unassigned')}
+                                </span>
+                              </td>
+                              <td className="py-3 px-4">
+                                <span
+                                  className={`px-2 py-0.5 rounded-md text-xs font-bold ${
+                                    s.type === 'Lab'
+                                      ? 'bg-amber-50 text-amber-700 border border-amber-200'
+                                      : 'bg-blue-50 text-blue-700 border border-blue-200'
+                                  }`}
+                                >
+                                  {s.type} {s.type === 'Lab' && s.labBlockHours ? `(${s.labBlockHours}h block)` : ''}
+                                </span>
+                              </td>
+                              <td className="py-3 px-4 font-bold text-slate-700">{s.weeklyHours} hrs</td>
+                              <td className="py-3 px-4">
+                                <span
+                                  className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-semibold ${
+                                    s.status === 'ACTIVE'
+                                      ? 'bg-emerald-50 text-emerald-700 border border-emerald-200'
+                                      : 'bg-slate-100 text-slate-500 border border-slate-200'
+                                  }`}
+                                >
+                                  {s.status}
+                                </span>
+                              </td>
+                              <td className="py-3 px-4 text-right space-x-1.5">
+                                <button
+                                  onClick={() => {
+                                    setEditingSubject(s);
+                                    setSubjCode(s.code);
+                                    setSubjName(s.name);
+                                    setSubjType(s.type);
+                                    setSubjHours(s.weeklyHours);
+                                    setSubjLabBlock(s.labBlockHours || 4);
+                                    setSubjYearOfStudy(s.yearOfStudy || selectedSubjectYear);
+                                    setSubjSemester(s.semester || (s.semesterNumber ? `Semester ${s.semesterNumber}` : selectedSemesterTab));
+                                    setSubjAllowChangeSemester(false);
+                                    setModalError(null);
+                                    setSubjectModalOpen(true);
+                                  }}
+                                  className="p-1.5 text-slate-400 hover:text-[#3431B7] hover:bg-slate-100 rounded-md transition-colors cursor-pointer"
+                                  title="Edit Subject"
+                                >
+                                  <Edit2 className="w-4 h-4" />
+                                </button>
+                                <button
+                                  onClick={() => handleToggleSubjectStatus(s)}
+                                  className="p-1.5 text-slate-400 hover:text-amber-600 hover:bg-slate-100 rounded-md transition-colors cursor-pointer"
+                                  title={s.status === 'ACTIVE' ? 'Archive Subject' : 'Reactivate'}
+                                >
+                                  <Archive className="w-4 h-4" />
+                                </button>
+                              </td>
+                            </tr>
+                          ))
+                        )}
+                      </tbody>
+                    </table>
+                  </div>
                 </div>
-              </div>
+              )}
             </div>
           )}
         </div>
@@ -2401,7 +2491,7 @@ export default function DepartmentDetailPage() {
       {/* ========================================================= */}
       {staffModalOpen && (
         <div className="fixed inset-0 bg-slate-900/40 backdrop-blur-xs flex items-center justify-center p-4 z-50">
-          <div className="bg-white rounded-2xl max-w-lg w-full p-6 shadow-xl border border-slate-100 animate-in fade-in zoom-in-95 duration-100 max-h-[90vh] overflow-y-auto">
+          <div className="bg-white rounded-2xl max-w-xl w-full p-6 shadow-xl border border-slate-100 animate-in fade-in zoom-in-95 duration-100 max-h-[90vh] overflow-y-auto">
             <h3 className="text-lg font-bold text-slate-900 mb-1">
               {editingStaff ? `Edit Faculty — ${editingStaff.memberId}` : 'Add Department Faculty'}
             </h3>
@@ -2457,7 +2547,7 @@ export default function DepartmentDetailPage() {
                   <div className="grid grid-cols-3 gap-3">
                     <div className="col-span-2">
                       <label className="block text-xs font-semibold uppercase tracking-wider text-slate-700 mb-1">
-                        Full Name
+                        Full Name *
                       </label>
                       <input
                         type="text"
@@ -2485,10 +2575,11 @@ export default function DepartmentDetailPage() {
                   <div className="grid grid-cols-2 gap-3">
                     <div>
                       <label className="block text-xs font-semibold uppercase tracking-wider text-slate-700 mb-1">
-                        Designation
+                        Designation <span className="text-[10px] text-slate-400 font-normal lowercase">(optional)</span>
                       </label>
                       <input
                         type="text"
+                        placeholder="e.g. Professor, Assistant Professor, Lecturer"
                         value={staffDesignation}
                         onChange={(e) => setStaffDesignation(e.target.value)}
                         className="w-full px-3 py-2 text-sm border border-slate-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-[#3431B7]"
@@ -2519,46 +2610,6 @@ export default function DepartmentDetailPage() {
                       onChange={(e) => setStaffEmail(e.target.value)}
                       className="w-full px-3 py-2 text-sm border border-slate-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-[#3431B7]"
                     />
-                  </div>
-
-                  {/* Qualified Subjects Selection */}
-                  <div>
-                    <label className="block text-xs font-semibold uppercase tracking-wider text-slate-700 mb-1">
-                      Qualified Subjects (Department Curriculum)
-                    </label>
-                    <div className="border border-slate-200 rounded-xl p-3 bg-slate-50 max-h-40 overflow-y-auto space-y-1.5">
-                      {subjects.length === 0 ? (
-                        <p className="text-xs text-slate-400 italic">No subjects configured in this department yet.</p>
-                      ) : (
-                        subjects.map(subj => {
-                          const isChecked = staffSubjectIds.includes(subj.subjectId);
-                          return (
-                            <label
-                              key={subj.subjectId}
-                              className={`flex items-center gap-2 p-1.5 rounded-lg text-xs cursor-pointer transition-colors ${
-                                isChecked ? 'bg-indigo-50/80 text-indigo-900 font-semibold' : 'hover:bg-slate-100 text-slate-700'
-                              }`}
-                            >
-                              <input
-                                type="checkbox"
-                                checked={isChecked}
-                                onChange={(e) => {
-                                  if (e.target.checked) {
-                                    setStaffSubjectIds([...staffSubjectIds, subj.subjectId]);
-                                  } else {
-                                    setStaffSubjectIds(staffSubjectIds.filter(id => id !== subj.subjectId));
-                                  }
-                                }}
-                                className="rounded text-[#3431B7] focus:ring-[#3431B7]"
-                              />
-                              <span className="font-mono text-[11px] font-bold text-[#3431B7]">{subj.code}</span>
-                              <span className="truncate">{subj.name}</span>
-                              <span className="text-[10px] text-slate-400 ml-auto">({subj.type})</span>
-                            </label>
-                          );
-                        })
-                      )}
-                    </div>
                   </div>
                 </>
               ) : (
@@ -2618,10 +2669,10 @@ export default function DepartmentDetailPage() {
         <div className="fixed inset-0 bg-slate-900/40 backdrop-blur-xs flex items-center justify-center p-4 z-50">
           <div className="bg-white rounded-2xl max-w-md w-full p-6 shadow-xl border border-slate-100 animate-in fade-in zoom-in-95 duration-100">
             <h3 className="text-lg font-bold text-slate-900 mb-1">
-              {editingSubject ? 'Edit Subject' : `Add Subject to ${department.code}`}
+              {editingSubject ? `Edit Subject: ${editingSubject.code}` : `Add Subject to ${department.code}`}
             </h3>
             <p className="text-xs text-slate-500 mb-4">
-              Configure curriculum course code, required weekly hours, and laboratory blocks.
+              Configure curriculum course code, required weekly hours, and semester association.
             </p>
 
             {modalError && (
@@ -2631,6 +2682,49 @@ export default function DepartmentDetailPage() {
             )}
 
             <form onSubmit={handleSaveSubject} className="space-y-4">
+              {/* Year & Semester Context Box */}
+              <div className="p-3 bg-slate-50 rounded-xl border border-slate-200 text-xs space-y-2">
+                <div className="grid grid-cols-2 gap-2">
+                  <div>
+                    <span className="text-[10px] text-slate-400 font-bold uppercase block">Year Level</span>
+                    <span className="font-bold text-slate-800">{subjYearOfStudy}</span>
+                  </div>
+                  <div>
+                    <span className="text-[10px] text-slate-400 font-bold uppercase block">Semester</span>
+                    {editingSubject && !subjAllowChangeSemester ? (
+                      <div className="flex items-center justify-between">
+                        <span className="font-bold text-[#3431B7]">{subjSemester}</span>
+                        <button
+                          type="button"
+                          onClick={() => setSubjAllowChangeSemester(true)}
+                          className="text-[11px] text-indigo-600 hover:underline font-semibold cursor-pointer"
+                        >
+                          Change
+                        </button>
+                      </div>
+                    ) : (
+                      <select
+                        value={subjSemester}
+                        onChange={(e) => setSubjSemester(e.target.value)}
+                        className="w-full px-2 py-1 text-xs border border-slate-300 rounded-lg bg-white font-bold text-[#3431B7] focus:outline-none focus:ring-1 focus:ring-[#3431B7]"
+                      >
+                        {getSemestersForYear(subjYearOfStudy).map(sem => (
+                          <option key={sem.name} value={sem.name}>
+                            {sem.name}
+                          </option>
+                        ))}
+                      </select>
+                    )}
+                  </div>
+                </div>
+
+                {editingSubject && subjAllowChangeSemester && (
+                  <p className="text-[11px] text-amber-700 pt-1 border-t border-amber-200/60 leading-tight">
+                    * Changing semester reassigns this course's curriculum scope. Active teaching assignments in other semesters will need to be re-evaluated.
+                  </p>
+                )}
+              </div>
+
               <div className="grid grid-cols-2 gap-3">
                 <div>
                   <label className="block text-xs font-semibold uppercase tracking-wider text-slate-700 mb-1">
@@ -2647,16 +2741,15 @@ export default function DepartmentDetailPage() {
                 </div>
                 <div>
                   <label className="block text-xs font-semibold uppercase tracking-wider text-slate-700 mb-1">
-                    Year Level
+                    Course Type
                   </label>
                   <select
-                    value={subjYearOfStudy}
-                    onChange={(e) => setSubjYearOfStudy(e.target.value as any)}
+                    value={subjType}
+                    onChange={(e) => setSubjType(e.target.value as any)}
                     className="w-full px-3 py-2 text-sm border border-slate-300 rounded-lg bg-white font-medium focus:outline-none focus:ring-2 focus:ring-[#3431B7]"
                   >
-                    {UNDERGRADUATE_YEARS.map(y => (
-                      <option key={y} value={y}>{y}</option>
-                    ))}
+                    <option value="Theory">Theory</option>
+                    <option value="Lab">Laboratory</option>
                   </select>
                 </div>
               </div>
@@ -2678,19 +2771,6 @@ export default function DepartmentDetailPage() {
               <div className="grid grid-cols-2 gap-3">
                 <div>
                   <label className="block text-xs font-semibold uppercase tracking-wider text-slate-700 mb-1">
-                    Course Type
-                  </label>
-                  <select
-                    value={subjType}
-                    onChange={(e) => setSubjType(e.target.value as any)}
-                    className="w-full px-3 py-2 text-sm border border-slate-300 rounded-lg bg-white font-medium focus:outline-none focus:ring-2 focus:ring-[#3431B7]"
-                  >
-                    <option value="Theory">Theory</option>
-                    <option value="Lab">Laboratory</option>
-                  </select>
-                </div>
-                <div>
-                  <label className="block text-xs font-semibold uppercase tracking-wider text-slate-700 mb-1">
                     Weekly Hours
                   </label>
                   <input
@@ -2702,26 +2782,22 @@ export default function DepartmentDetailPage() {
                     className="w-full px-3 py-2 text-sm border border-slate-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-[#3431B7]"
                   />
                 </div>
+                {subjType === 'Lab' && (
+                  <div>
+                    <label className="block text-xs font-semibold uppercase tracking-wider text-slate-700 mb-1">
+                      Lab Block (Hours)
+                    </label>
+                    <input
+                      type="number"
+                      min="2"
+                      max="4"
+                      value={subjLabBlock}
+                      onChange={(e) => setSubjLabBlock(Number(e.target.value))}
+                      className="w-full px-3 py-2 text-sm border border-slate-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-[#3431B7]"
+                    />
+                  </div>
+                )}
               </div>
-
-              {subjType === 'Lab' && (
-                <div>
-                  <label className="block text-xs font-semibold uppercase tracking-wider text-slate-700 mb-1">
-                    Continuous Lab Block (Hours)
-                  </label>
-                  <input
-                    type="number"
-                    min="2"
-                    max="4"
-                    value={subjLabBlock}
-                    onChange={(e) => setSubjLabBlock(Number(e.target.value))}
-                    className="w-full px-3 py-2 text-sm border border-slate-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-[#3431B7]"
-                  />
-                  <p className="text-[11px] text-slate-500 mt-1">
-                    Placed continuously in the schedule without bell break splits.
-                  </p>
-                </div>
-              )}
 
               <div className="flex justify-end gap-3 pt-3 border-t border-slate-100">
                 <button
@@ -2816,62 +2892,49 @@ export default function DepartmentDetailPage() {
       )}
 
       {/* ========================================================= */}
-      {/* MODAL 4: TEACHING ASSIGNMENT                             */}
-      {/* ========================================================= */}
-      {/* ========================================================= */}
-      {/* MODAL 4: TEACHING ASSIGNMENT (ENHANCED AUTO-MAPPING UX)   */}
+      {/* MODAL 4: TEACHING ASSIGNMENT (SIMPLIFIED CLEAN POPUP)    */}
       {/* ========================================================= */}
       {assignModalOpen && (() => {
         const modalSelectedClass = classes.find(c => c.classId === assignClassId);
         const modalCohortSubjects = modalSelectedClass
-          ? subjects.filter(s => !s.yearOfStudy || s.yearOfStudy === modalSelectedClass.yearOfStudy)
+          ? subjects.filter(
+              s =>
+                (!s.yearOfStudy || s.yearOfStudy === modalSelectedClass.yearOfStudy) &&
+                (!s.semester || s.semester === assignSemester || s.semesterNumber === getSemesterNumber(assignSemester))
+            )
           : subjects;
         const modalOtherSubjects = modalSelectedClass
-          ? subjects.filter(s => s.yearOfStudy && s.yearOfStudy !== modalSelectedClass.yearOfStudy)
+          ? subjects.filter(
+              s =>
+                s.yearOfStudy &&
+                (s.yearOfStudy !== modalSelectedClass.yearOfStudy ||
+                 (s.semester && s.semester !== assignSemester && s.semesterNumber !== getSemesterNumber(assignSemester)))
+            )
           : [];
         const modalSelectedSubj = subjects.find(s => s.subjectId === assignSubjId);
         const modalSelectedFaculty = (showCrossDeptStaff ? allCollegeStaff : deptStaff).find(s => s.memberId === assignMemberId)
           || allCollegeStaff.find(s => s.memberId === assignMemberId);
-        const modalFacultyQSubjIds = Array.isArray(modalSelectedFaculty?.subjectIds) ? modalSelectedFaculty.subjectIds : [];
-        const isFacultyQualified = !!(modalSelectedFaculty && modalFacultyQSubjIds.includes(assignSubjId));
-        const isReadyToSave = !!(assignClassId && assignSubjId && assignMemberId && isFacultyQualified);
-        const modalFacultyAssignments = modalSelectedFaculty
-          ? assignments.filter(a => a.memberId === modalSelectedFaculty.memberId)
-          : [];
-        const modalFacultyAssignedHours = modalFacultyAssignments.reduce((acc, a) => acc + (a.weeklyHours || 0), 0);
+        const isReadyToSave = !!(assignClassId && assignSubjId && assignMemberId);
 
-        // Sort active staff: qualified first, then unqualified
+        // Active faculty sorted alphabetically
         const deptActiveStaff = deptStaff.filter(s => s.status === 'ACTIVE');
-        const sortedDeptStaff = [...deptActiveStaff].sort((a, b) => {
-          const aQ = (a.subjectIds || []).includes(assignSubjId) ? 1 : 0;
-          const bQ = (b.subjectIds || []).includes(assignSubjId) ? 1 : 0;
-          return bQ - aQ;
-        });
+        const sortedDeptStaff = [...deptActiveStaff].sort((a, b) => a.displayName.localeCompare(b.displayName));
 
         const crossActiveStaff = allCollegeStaff.filter(s => !existingDeptMemberIds.has(s.memberId) && s.status === 'ACTIVE');
-        const sortedCrossStaff = [...crossActiveStaff].sort((a, b) => {
-          const aQ = (a.subjectIds || []).includes(assignSubjId) ? 1 : 0;
-          const bQ = (b.subjectIds || []).includes(assignSubjId) ? 1 : 0;
-          return bQ - aQ;
-        });
+        const sortedCrossStaff = [...crossActiveStaff].sort((a, b) => a.displayName.localeCompare(b.displayName));
 
         return (
-          <div className="fixed inset-0 bg-slate-900/40 backdrop-blur-xs flex items-center justify-center p-3 sm:p-4 z-50 overflow-y-auto">
-            <div className="bg-white rounded-2xl max-w-2xl w-full my-6 p-6 shadow-2xl border border-slate-100 flex flex-col max-h-[92vh] animate-in fade-in zoom-in-95 duration-100">
-              {/* Header */}
-              <div className="flex items-start justify-between pb-3 border-b border-slate-100 shrink-0">
-                <div className="flex items-center gap-3">
-                  <div className="w-10 h-10 rounded-xl bg-[#EEF0FA] text-[#3431B7] flex items-center justify-center shrink-0">
-                    <Sparkles className="w-5 h-5" />
-                  </div>
-                  <div>
-                    <h3 className="text-lg font-bold text-slate-900">
-                      Map Faculty to Subject
-                    </h3>
-                    <p className="text-xs text-slate-500">
-                      Intelligent master data auto-mapping for section teaching assignments.
-                    </p>
-                  </div>
+          <div className="fixed inset-0 bg-slate-900/40 backdrop-blur-xs flex items-center justify-center p-4 z-50">
+            <div className="bg-white rounded-2xl max-w-lg w-full p-6 shadow-xl border border-slate-100 animate-in fade-in zoom-in-95 duration-100 max-h-[90vh] overflow-y-auto">
+              {/* Modal Header */}
+              <div className="flex items-center justify-between pb-3 border-b border-slate-100 mb-4">
+                <div>
+                  <h3 className="text-lg font-bold text-slate-900">
+                    Map Faculty to Subject
+                  </h3>
+                  <p className="text-xs text-slate-500">
+                    Assign a faculty member to teach a curriculum subject for this section.
+                  </p>
                 </div>
                 <button
                   type="button"
@@ -2884,127 +2947,125 @@ export default function DepartmentDetailPage() {
 
               {/* Error Alert */}
               {modalError && (
-                <div className="mt-3 p-3 bg-rose-50 border border-rose-200 rounded-xl text-xs text-rose-700 font-medium flex items-center gap-2 shrink-0">
+                <div className="mb-4 p-3 bg-rose-50 border border-rose-200 rounded-xl text-xs text-rose-700 font-medium flex items-center gap-2">
                   <AlertTriangle className="w-4 h-4 shrink-0 text-rose-600" />
                   <span>{modalError}</span>
                 </div>
               )}
 
-              {/* Scrollable Form Body */}
-              <form onSubmit={handleSaveAssignment} className="flex-1 overflow-y-auto pr-1 py-4 space-y-5">
-                {/* 1. Academic Context */}
+              <form onSubmit={handleSaveAssignment} className="space-y-4">
+                {/* SECTION 1: ASSIGNMENT CONTEXT */}
                 <div className="space-y-2">
-                  <div className="text-[11px] font-bold uppercase tracking-wider text-slate-500 flex items-center justify-between">
-                    <span>1. Academic Scope & Cohort</span>
-                    <span className="text-[11px] text-slate-400 font-normal">Step 1 of 4</span>
+                  <label className="block text-xs font-semibold uppercase tracking-wider text-slate-700">
+                    Assignment Context
+                  </label>
+                  <div className="grid grid-cols-2 gap-2 text-xs">
+                    <div className="px-3 py-2 bg-slate-50 border border-slate-200 rounded-lg">
+                      <span className="text-[10px] text-slate-400 font-semibold uppercase block">Department</span>
+                      <span className="font-bold text-slate-800 truncate block">{department.name}</span>
+                    </div>
+                    <div className="px-3 py-2 bg-slate-50 border border-slate-200 rounded-lg">
+                      <span className="text-[10px] text-slate-400 font-semibold uppercase block">Academic Year</span>
+                      <span className="font-bold text-slate-800 block">{modalSelectedClass?.academicYear || '2025–2026'}</span>
+                    </div>
                   </div>
-
-                  {/* Department Read-Only Pill */}
-                  <div className="flex items-center gap-2 px-3.5 py-2 bg-slate-50 border border-slate-200 rounded-xl text-xs font-semibold text-slate-700">
-                    <GraduationCap className="w-4 h-4 text-[#3431B7]" />
-                    <span>Department of {department.name} ({department.code})</span>
-                    <span className="text-[10px] bg-[#EEF0FA] text-[#3431B7] px-2 py-0.5 rounded font-mono font-bold ml-auto">
-                      {department.departmentId}
-                    </span>
-                  </div>
-
-                  {/* Class Section Select */}
-                  <div>
-                    <label className="block text-xs font-semibold text-slate-700 mb-1">
-                      Academic Cohort & Section
-                    </label>
-                    <select
-                      value={assignClassId}
-                      onChange={(e) => handleAssignClassChange(e.target.value)}
-                      className="w-full px-3 py-2 text-sm border border-slate-300 rounded-lg bg-white font-medium focus:outline-none focus:ring-2 focus:ring-[#3431B7]"
-                    >
-                      {classes.map(c => (
-                        <option key={c.classId} value={c.classId}>
-                          {c.yearOfStudy} — Section {c.section} ({c.academicYear})
-                        </option>
-                      ))}
-                    </select>
+                  <div className="grid grid-cols-2 gap-2">
+                    <div>
+                      <label className="block text-[11px] font-semibold text-slate-600 mb-1">
+                        Section
+                      </label>
+                      <select
+                        value={assignClassId}
+                        onChange={(e) => handleAssignClassChange(e.target.value)}
+                        className="w-full px-3 py-2 text-sm border border-slate-300 rounded-lg bg-white font-medium focus:outline-none focus:ring-2 focus:ring-[#3431B7]"
+                      >
+                        {classes.map(c => (
+                          <option key={c.classId} value={c.classId}>
+                            {c.yearOfStudy} — Section {c.section}
+                          </option>
+                        ))}
+                      </select>
+                    </div>
+                    <div>
+                      <label className="block text-[11px] font-semibold text-slate-600 mb-1">
+                        Semester
+                      </label>
+                      <select
+                        value={assignSemester}
+                        onChange={(e) => handleAssignSemesterChange(e.target.value)}
+                        className="w-full px-3 py-2 text-sm border border-slate-300 rounded-lg bg-white font-bold text-[#3431B7] focus:outline-none focus:ring-2 focus:ring-[#3431B7]"
+                      >
+                        {getSemestersForYear(modalSelectedClass?.yearOfStudy).map(s => (
+                          <option key={s.name} value={s.name}>
+                            {s.name}
+                          </option>
+                        ))}
+                      </select>
+                    </div>
                   </div>
                 </div>
 
-                {/* 2. Subject Selection & Master Details */}
+                {/* SECTION 2: SUBJECT COURSE */}
                 <div className="space-y-2">
-                  <div className="text-[11px] font-bold uppercase tracking-wider text-slate-500 flex items-center justify-between">
-                    <span>2. Curriculum Subject Course</span>
-                    <span className="text-[11px] text-slate-400 font-normal">Step 2 of 4</span>
-                  </div>
-
+                  <label className="block text-xs font-semibold uppercase tracking-wider text-slate-700">
+                    Subject Course
+                  </label>
                   <select
                     value={assignSubjId}
                     onChange={(e) => handleAssignSubjectChange(e.target.value)}
                     className="w-full px-3 py-2 text-sm border border-slate-300 rounded-lg bg-white font-medium focus:outline-none focus:ring-2 focus:ring-[#3431B7]"
                   >
-                    <optgroup label={`Cohort Subjects (${modalSelectedClass?.yearOfStudy || 'Curriculum'})`}>
-                      {modalCohortSubjects.map(s => {
-                        const isQualified = modalSelectedFaculty && (modalSelectedFaculty.subjectIds || []).includes(s.subjectId);
-                        return (
-                          <option key={s.subjectId} value={s.subjectId}>
-                            {s.code} — {s.name} ({s.type}, {s.weeklyHours}h/wk){isQualified ? ' [✓ Qualified]' : ''}
-                          </option>
-                        );
-                      })}
+                    <optgroup label={`Cohort Subjects (${modalSelectedClass?.yearOfStudy || 'Curriculum'} — ${assignSemester})`}>
+                      {modalCohortSubjects.map(s => (
+                        <option key={s.subjectId} value={s.subjectId}>
+                          {s.name} ({s.type}, {s.weeklyHours} hrs/wk)
+                        </option>
+                      ))}
                     </optgroup>
                     {modalOtherSubjects.length > 0 && (
                       <optgroup label="Other Department Subjects">
-                        {modalOtherSubjects.map(s => {
-                          const isQualified = modalSelectedFaculty && (modalSelectedFaculty.subjectIds || []).includes(s.subjectId);
-                          return (
-                            <option key={s.subjectId} value={s.subjectId}>
-                              {s.code} — {s.name} ({s.yearOfStudy || 'General'}, {s.weeklyHours}h/wk){isQualified ? ' [✓ Qualified]' : ''}
-                            </option>
-                          );
-                        })}
+                        {modalOtherSubjects.map(s => (
+                          <option key={s.subjectId} value={s.subjectId}>
+                            {s.name} ({s.type}, {s.weeklyHours} hrs/wk)
+                          </option>
+                        ))}
                       </optgroup>
                     )}
                   </select>
 
-                  {/* Subject Master Details Card */}
+                  {/* Selected Subject Display: Only Subject Name, Subject Type, Weekly Hours */}
                   {modalSelectedSubj && (
-                    <div className="p-3 bg-slate-50 border border-slate-200 rounded-xl space-y-2">
-                      <div className="flex items-center justify-between">
-                        <div className="flex items-center gap-2">
-                          <BookOpen className="w-4 h-4 text-[#3431B7]" />
-                          <span className="font-bold text-sm text-slate-900">
-                            {modalSelectedSubj.code} — {modalSelectedSubj.name}
+                    <div className="p-3 bg-slate-50 border border-slate-200 rounded-xl flex items-center justify-between text-xs">
+                      <div>
+                        <span className="text-[10px] text-slate-400 font-semibold uppercase block">Subject Name</span>
+                        <span className="font-bold text-slate-900 text-sm">{modalSelectedSubj.name}</span>
+                      </div>
+                      <div className="flex items-center gap-3">
+                        <div className="text-right">
+                          <span className="text-[10px] text-slate-400 font-semibold uppercase block">Type</span>
+                          <span className={`px-2 py-0.5 rounded text-xs font-bold ${
+                            modalSelectedSubj.type === 'Lab'
+                              ? 'bg-purple-100 text-purple-700'
+                              : 'bg-blue-100 text-blue-700'
+                          }`}>
+                            {modalSelectedSubj.type}
                           </span>
                         </div>
-                        <span className={`px-2 py-0.5 rounded text-xs font-bold ${
-                          modalSelectedSubj.type === 'Lab'
-                            ? 'bg-purple-100 text-purple-700 border border-purple-200'
-                            : 'bg-blue-100 text-blue-700 border border-blue-200'
-                        }`}>
-                          {modalSelectedSubj.type}
-                        </span>
-                      </div>
-                      <div className="flex flex-wrap items-center gap-2 pt-1 border-t border-slate-200/60 text-xs">
-                        <span className="text-slate-500 font-medium">
-                          Cohort: <strong className="text-slate-700">{modalSelectedSubj.yearOfStudy || 'All Years'}</strong>
-                        </span>
-                        <span className="text-slate-300">•</span>
-                        <span className="text-slate-500 font-medium">
-                          Term: <strong className="text-slate-700">{modalSelectedSubj.semester || 'Semester 1'}</strong>
-                        </span>
-                        <span className="text-slate-300">•</span>
-                        <span className="inline-flex items-center gap-1 font-bold text-[#3431B7] bg-[#EEF0FA] px-2.5 py-0.5 rounded-full">
-                          <Clock className="w-3.5 h-3.5" />
-                          Master Workload: {modalSelectedSubj.weeklyHours} Hours/Week (Non-editable)
-                        </span>
+                        <div className="text-right">
+                          <span className="text-[10px] text-slate-400 font-semibold uppercase block">Weekly Hours</span>
+                          <span className="font-bold text-[#3431B7]">{modalSelectedSubj.weeklyHours} hrs/wk</span>
+                        </div>
                       </div>
                     </div>
                   )}
                 </div>
 
-                {/* 3. Faculty Selection & Profile */}
+                {/* SECTION 3: FACULTY */}
                 <div className="space-y-2">
                   <div className="flex items-center justify-between">
-                    <div className="text-[11px] font-bold uppercase tracking-wider text-slate-500">
-                      3. Assigned Faculty Member
-                    </div>
+                    <label className="block text-xs font-semibold uppercase tracking-wider text-slate-700">
+                      Faculty Member
+                    </label>
                     <button
                       type="button"
                       onClick={handleToggleCrossDept}
@@ -3014,183 +3075,56 @@ export default function DepartmentDetailPage() {
                     </button>
                   </div>
 
-                  {/* Auto-Match Feedback Banner */}
-                  {autoMatchInfo && (
-                    <div className={`p-2.5 rounded-xl border text-xs flex items-center gap-2 ${
-                      autoMatchInfo.type === 'NONE'
-                        ? 'bg-amber-50 border-amber-200 text-amber-800'
-                        : 'bg-emerald-50 border-emerald-200 text-emerald-800'
-                    }`}>
-                      {autoMatchInfo.type === 'NONE' ? (
-                        <AlertTriangle className="w-4 h-4 shrink-0 text-amber-600" />
-                      ) : (
-                        <Sparkles className="w-4 h-4 shrink-0 text-emerald-600" />
-                      )}
-                      <span>{autoMatchInfo.message}</span>
-                    </div>
-                  )}
-
                   <select
                     value={assignMemberId}
                     onChange={(e) => handleAssignFacultyChange(e.target.value)}
                     className="w-full px-3 py-2 text-sm border border-slate-300 rounded-lg bg-white font-medium focus:outline-none focus:ring-2 focus:ring-[#3431B7]"
                   >
                     <option value="" disabled>-- Select Faculty Member --</option>
-                    <optgroup label={`${department.name} Faculty (Same-Dept)`}>
-                      {sortedDeptStaff.map(st => {
-                        const isQ = (st.subjectIds || []).includes(assignSubjId);
-                        return (
-                          <option key={st.memberId} value={st.memberId}>
-                            {st.displayName} ({st.memberId}) — {st.designation}{isQ ? ' [✓ Qualified]' : ' (Not Qualified)'}
-                          </option>
-                        );
-                      })}
+                    <optgroup label={`${department.name} Faculty`}>
+                      {sortedDeptStaff.map(st => (
+                        <option key={st.memberId} value={st.memberId}>
+                          {st.displayName} ({st.memberId}){st.designation ? ` — ${st.designation}` : ''}
+                        </option>
+                      ))}
                     </optgroup>
 
                     {showCrossDeptStaff && (
-                      <optgroup label="Other Departments (Cross-Department Links)">
-                        {sortedCrossStaff.map(st => {
-                          const isQ = (st.subjectIds || []).includes(assignSubjId);
-                          return (
-                            <option key={st.memberId} value={st.memberId}>
-                              {st.displayName} ({st.memberId}) — [{st.primaryDepartmentId.replace('dept-', '').toUpperCase()}]{isQ ? ' [✓ Qualified]' : ' (Not Qualified)'}
-                            </option>
-                          );
-                        })}
+                      <optgroup label="Other Departments">
+                        {sortedCrossStaff.map(st => (
+                          <option key={st.memberId} value={st.memberId}>
+                            {st.displayName} ({st.memberId}) — [{st.primaryDepartmentId.replace('dept-', '').toUpperCase()}]{st.designation ? ` (${st.designation})` : ''}
+                          </option>
+                        ))}
                       </optgroup>
                     )}
                   </select>
 
-                  {/* Faculty Profile Card */}
+                  {/* Selected Faculty Display: Only Faculty Name, Member ID, Designation */}
                   {modalSelectedFaculty && (
-                    <div className="p-3.5 bg-slate-50 border border-slate-200 rounded-xl space-y-2.5">
-                      <div className="flex items-center justify-between">
-                        <div className="flex items-center gap-3">
-                          <div className="w-10 h-10 rounded-full bg-gradient-to-br from-[#3431B7] to-[#251F91] text-white flex items-center justify-center font-bold text-xs shrink-0 shadow-2xs">
-                            {modalSelectedFaculty.initials || modalSelectedFaculty.staffName?.charAt(0)?.toUpperCase() || 'F'}
-                          </div>
-                          <div>
-                            <div className="flex items-center gap-2">
-                              <span className="font-bold text-slate-900 text-sm">
-                                {modalSelectedFaculty.displayName}
-                              </span>
-                              <span className="font-mono text-[11px] font-bold text-[#3431B7] bg-[#EEF0FA] px-1.5 py-0.5 rounded">
-                                {modalSelectedFaculty.memberId}
-                              </span>
-                            </div>
-                            <div className="text-xs text-slate-500">
-                              {modalSelectedFaculty.designation} • {modalSelectedFaculty.primaryDepartmentId === departmentId
-                                ? `${department.name} (${department.code})`
-                                : `Cross-Dept (${modalSelectedFaculty.primaryDepartmentId.replace('dept-', '').toUpperCase()})`}
-                            </div>
-                          </div>
-                        </div>
-
-                        <div className="flex flex-col items-end gap-1">
-                          <span className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[11px] font-semibold ${
-                            modalSelectedFaculty.status === 'ACTIVE'
-                              ? 'bg-emerald-50 text-emerald-700 border border-emerald-200'
-                              : 'bg-slate-100 text-slate-500 border border-slate-200'
-                          }`}>
-                            {modalSelectedFaculty.status === 'ACTIVE' ? <CheckCircle2 className="w-3 h-3" /> : <XCircle className="w-3 h-3" />}
-                            {modalSelectedFaculty.status}
-                          </span>
-                          {modalSelectedFaculty.primaryDepartmentId !== departmentId && (
-                            <span className="text-[10px] text-indigo-700 font-semibold bg-indigo-50 px-1.5 py-0.5 rounded">
-                              Cross-Dept Link
-                            </span>
-                          )}
-                        </div>
+                    <div className="p-3 bg-slate-50 border border-slate-200 rounded-xl flex items-center justify-between text-xs">
+                      <div>
+                        <span className="text-[10px] text-slate-400 font-semibold uppercase block">Faculty Name</span>
+                        <span className="font-bold text-slate-900 text-sm">{modalSelectedFaculty.displayName}</span>
                       </div>
-
-                      <div className="pt-2 border-t border-slate-200/60">
-                        <div className="text-[11px] font-semibold text-slate-600 mb-1.5">
-                          Qualified Courses ({modalFacultyQSubjIds.length}):
+                      <div className="flex items-center gap-3">
+                        <div className="text-right">
+                          <span className="text-[10px] text-slate-400 font-semibold uppercase block">Member ID</span>
+                          <span className="font-mono font-bold text-[#3431B7] text-xs">{modalSelectedFaculty.memberId}</span>
                         </div>
-                        {modalFacultyQSubjIds.length === 0 ? (
-                          <span className="text-xs text-amber-700 italic">
-                            No qualified subjects configured for this faculty member.
-                          </span>
-                        ) : (
-                          <div className="flex flex-wrap gap-1.5 max-h-24 overflow-y-auto">
-                            {modalFacultyQSubjIds.map(sId => {
-                              const sObj = subjectMap.get(sId);
-                              const isCurrent = sId === assignSubjId;
-                              return (
-                                <span
-                                  key={sId}
-                                  className={`inline-flex items-center gap-1 text-[11px] px-2 py-0.5 rounded-md font-semibold ${
-                                    isCurrent
-                                      ? 'bg-[#3431B7] text-white shadow-2xs'
-                                      : 'bg-white border border-slate-200 text-slate-700'
-                                  }`}
-                                >
-                                  {isCurrent && <Check className="w-3 h-3" />}
-                                  {sObj ? `${sObj.name} (${sObj.code})` : sId}
-                                </span>
-                              );
-                            })}
+                        {modalSelectedFaculty.designation && (
+                          <div className="text-right">
+                            <span className="text-[10px] text-slate-400 font-semibold uppercase block">Designation</span>
+                            <span className="font-semibold text-slate-700">{modalSelectedFaculty.designation}</span>
                           </div>
                         )}
                       </div>
-
-                      {modalFacultyAssignments.length > 0 && (
-                        <div className="text-[11px] text-slate-500 pt-1">
-                          Current Department Workload: <strong className="text-slate-800">{modalFacultyAssignments.length} sections ({modalFacultyAssignedHours} hrs/week)</strong>
-                        </div>
-                      )}
                     </div>
                   )}
                 </div>
 
-                {/* 4. Assignment Confirmation Summary */}
-                <div className="space-y-2">
-                  <div className="text-[11px] font-bold uppercase tracking-wider text-slate-500 flex items-center justify-between">
-                    <span>4. Assignment Confirmation Summary</span>
-                    <span className="text-[11px] text-slate-400 font-normal">Step 4 of 4</span>
-                  </div>
-
-                  <div className="p-3.5 bg-gradient-to-br from-slate-50 to-indigo-50/40 border border-indigo-100 rounded-xl space-y-2">
-                    <div className="grid grid-cols-2 sm:grid-cols-4 gap-2.5 text-xs">
-                      <div className="bg-white p-2 rounded-lg border border-slate-200/70">
-                        <div className="text-[10px] text-slate-400 font-semibold uppercase">Class Section</div>
-                        <div className="font-bold text-slate-800 truncate">
-                          {modalSelectedClass ? `${modalSelectedClass.yearOfStudy} - Sec ${modalSelectedClass.section}` : '—'}
-                        </div>
-                      </div>
-                      <div className="bg-white p-2 rounded-lg border border-slate-200/70">
-                        <div className="text-[10px] text-slate-400 font-semibold uppercase">Subject Course</div>
-                        <div className="font-bold text-slate-800 truncate">
-                          {modalSelectedSubj ? `${modalSelectedSubj.code} (${modalSelectedSubj.type})` : '—'}
-                        </div>
-                      </div>
-                      <div className="bg-white p-2 rounded-lg border border-slate-200/70">
-                        <div className="text-[10px] text-slate-400 font-semibold uppercase">Faculty Member</div>
-                        <div className="font-bold text-slate-800 truncate">
-                          {modalSelectedFaculty ? modalSelectedFaculty.displayName : '—'}
-                        </div>
-                      </div>
-                      <div className="bg-white p-2 rounded-lg border border-slate-200/70">
-                        <div className="text-[10px] text-slate-400 font-semibold uppercase">Weekly Hours</div>
-                        <div className="font-bold text-[#3431B7]">
-                          {modalSelectedSubj ? `${modalSelectedSubj.weeklyHours} hrs/wk` : '—'}
-                        </div>
-                      </div>
-                    </div>
-
-                    {!isFacultyQualified && modalSelectedFaculty && (
-                      <div className="p-2.5 bg-rose-50 border border-rose-200 rounded-lg text-xs text-rose-700 flex items-center gap-2 font-medium">
-                        <AlertTriangle className="w-4 h-4 shrink-0 text-rose-600" />
-                        <span>
-                          {modalSelectedFaculty.displayName} is NOT qualified for {modalSelectedSubj?.name || 'this course'}. Only qualified faculty can be mapped.
-                        </span>
-                      </div>
-                    )}
-                  </div>
-                </div>
-
-                {/* Footer Buttons */}
-                <div className="flex items-center justify-end gap-3 pt-3 border-t border-slate-100 shrink-0">
+                {/* SECTION 4: ACTIONS */}
+                <div className="flex items-center justify-end gap-3 pt-3 border-t border-slate-100">
                   <button
                     type="button"
                     onClick={() => setAssignModalOpen(false)}
@@ -3203,7 +3137,7 @@ export default function DepartmentDetailPage() {
                     disabled={!isReadyToSave || saving}
                     className="px-5 py-2 text-sm font-semibold text-white bg-[#3431B7] hover:bg-[#28229E] disabled:opacity-50 disabled:cursor-not-allowed rounded-xl transition-colors cursor-pointer shadow-xs"
                   >
-                    {saving ? 'Mapping Faculty...' : 'Save Teaching Assignment'}
+                    {saving ? 'Saving...' : 'Save Assignment'}
                   </button>
                 </div>
               </form>

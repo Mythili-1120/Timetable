@@ -211,7 +211,7 @@ export async function createStaff(
     phone: rawPhone,
     phoneNumber: rawPhone,
     subjectIds,
-    designation: data.designation.trim() || 'Assistant Professor',
+    designation: (data.designation || '').trim(),
     primaryDepartmentId: data.primaryDepartmentId,
     status: 'ACTIVE',
     createdAt: new Date().toISOString(),

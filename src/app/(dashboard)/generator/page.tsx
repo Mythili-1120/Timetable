@@ -8,7 +8,7 @@ import {
   validateSubjectStaffForClass,
   SubjectStaffValidationResult
 } from '../../../lib/services/assignmentService';
-import { getAllSubjects, getCachedSubjects } from '../../../lib/services/subjectService';
+import { getAllSubjects, getCachedSubjects, getSemestersForYear } from '../../../lib/services/subjectService';
 import { getAllStaff, getCachedStaff } from '../../../lib/services/staffService';
 import { getCollegeSettings, getCachedCollegeSettings } from '../../../lib/services/settingsService';
 import {
@@ -29,6 +29,7 @@ import {
   TimetableSlot,
   PublishedTimetable
 } from '../../../types';
+import TimetableGrid from '../../../components/TimetableGrid';
 import { useAuth } from '../../../lib/context/AuthContext';
 import {
   Cpu,
@@ -300,6 +301,10 @@ export default function GeneratorPage() {
     setSelectedClassId('');
     setGrid([]);
     setValidation(null);
+    const sems = getSemestersForYear(year);
+    if (selectedSemester !== 'ALL' && !sems.some(s => s.name === selectedSemester)) {
+      setSelectedSemester(sems[0].name);
+    }
     const yearSections = classes.filter(c => c.yearOfStudy === year);
     if (yearSections.length > 0) {
       const firstSectionId = yearSections[0].classId;
@@ -755,8 +760,35 @@ export default function GeneratorPage() {
             </span>
           </div>
 
-          <div className="flex items-center gap-4 text-slate-500 text-[11px]">
-            <span>Active Semester: <strong className="text-slate-800">{selectedSemester}</strong></span>
+          <div className="flex items-center gap-4 text-slate-500 text-[11px] flex-wrap">
+            <div className="flex items-center gap-1.5">
+              <span className="font-bold text-slate-700">Semester:</span>
+              <button
+                type="button"
+                onClick={() => setSelectedSemester('ALL')}
+                className={`px-2 py-0.5 rounded text-xs font-bold transition-all cursor-pointer ${
+                  selectedSemester === 'ALL'
+                    ? 'bg-[#3431B7] text-white shadow-2xs'
+                    : 'bg-slate-100 text-slate-600 hover:bg-slate-200'
+                }`}
+              >
+                All
+              </button>
+              {getSemestersForYear(selectedYearOfStudy).map(sem => (
+                <button
+                  key={sem.name}
+                  type="button"
+                  onClick={() => setSelectedSemester(sem.name)}
+                  className={`px-2 py-0.5 rounded text-xs font-bold transition-all cursor-pointer ${
+                    selectedSemester === sem.name
+                      ? 'bg-[#3431B7] text-white shadow-2xs'
+                      : 'bg-slate-100 text-slate-600 hover:bg-slate-200'
+                  }`}
+                >
+                  {sem.name}
+                </button>
+              ))}
+            </div>
             <span>Academic Year: <strong className="text-slate-800">{academicYear}</strong></span>
           </div>
         </div>
@@ -1055,89 +1087,15 @@ export default function GeneratorPage() {
             </p>
           </div>
         ) : (
-          <div className="overflow-x-auto">
-            <table className="w-full border-collapse">
-              <thead>
-                <tr className="bg-slate-50 border-b border-slate-200 text-left text-xs text-slate-600 font-bold uppercase tracking-wider">
-                  <th className="py-3 px-4 w-28 border-r border-slate-200">Day</th>
-                  {teachingPeriods.map((p, idx) => (
-                    <th key={idx} className="py-3 px-3 text-center border-r border-slate-200 last:border-r-0 min-w-[130px]">
-                      <div>Period {idx + 1}</div>
-                      <div className="text-[10px] text-slate-400 font-medium normal-case">
-                        {p.startTime} - {p.endTime}
-                      </div>
-                    </th>
-                  ))}
-                </tr>
-              </thead>
-              <tbody className="divide-y divide-slate-200 text-xs">
-                {days.map((dayName, dIdx) => (
-                  <tr key={dayName} className="hover:bg-slate-50/40 transition-colors">
-                    <td className="py-4 px-4 font-extrabold text-slate-800 bg-slate-50/80 border-r border-slate-200">
-                      {dayName}
-                    </td>
-
-                    {teachingPeriods.map((_, pIdx) => {
-                      const slot = grid[dIdx] ? grid[dIdx][pIdx] : null;
-                      const isSelected = selectedSlot?.dayIdx === dIdx && selectedSlot?.periodIdx === pIdx;
-
-                      return (
-                        <td
-                          key={pIdx}
-                          onClick={() => handleSlotClick(dIdx, pIdx)}
-                          className={`p-2 border-r border-slate-200 last:border-r-0 transition-all ${
-                            status !== 'PUBLISHED' ? 'cursor-pointer' : ''
-                          } ${
-                            isSelected
-                              ? 'bg-indigo-100/80 ring-2 ring-[#3431B7] ring-inset'
-                              : slot
-                              ? 'hover:bg-slate-100/70'
-                              : 'hover:bg-slate-50/80'
-                          }`}
-                        >
-                          {slot ? (
-                            <div
-                              className={`p-2 rounded-xl border flex flex-col justify-between h-20 transition-all ${
-                                slot.type === 'Lab'
-                                  ? 'bg-amber-50/90 border-amber-200 text-amber-950'
-                                  : 'bg-[#F4F5FB] border-[#D2D6EC] text-slate-900'
-                              }`}
-                            >
-                              <div>
-                                <div className="flex items-center justify-between gap-1 mb-0.5">
-                                  <span className="font-mono text-[10px] font-black text-[#3431B7] bg-white px-1.5 py-0.2 rounded border border-slate-200">
-                                    {slot.subjectCode}
-                                  </span>
-                                  <span
-                                    className={`text-[9px] font-bold px-1 rounded ${
-                                      slot.type === 'Lab' ? 'bg-amber-200 text-amber-900' : 'bg-indigo-100 text-indigo-800'
-                                    }`}
-                                  >
-                                    {slot.type}
-                                  </span>
-                                </div>
-                                <div className="font-bold text-[11px] truncate leading-tight mt-1" title={slot.subjectName}>
-                                  {slot.subjectName}
-                                </div>
-                              </div>
-
-                              <div className="text-[10px] text-slate-500 font-medium truncate pt-1 border-t border-slate-200/60" title={slot.staffName}>
-                                {slot.staffName}
-                              </div>
-                            </div>
-                          ) : (
-                            <div className="h-20 rounded-xl border border-dashed border-slate-200 flex items-center justify-center text-slate-300 text-[10px]">
-                              Empty
-                            </div>
-                          )}
-                        </td>
-                      );
-                    })}
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
+          <TimetableGrid
+            grid={grid}
+            teachingPeriods={teachingPeriods}
+            days={days}
+            isEditable={status !== 'PUBLISHED'}
+            selectedSlot={selectedSlot}
+            onSlotClick={handleSlotClick}
+            slotSubtitleType="staff"
+          />
         )}
       </div>
 

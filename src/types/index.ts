@@ -87,6 +87,33 @@ export interface SubjectResolutionResult {
   message?: string;
 }
 
+export type UndergraduateYear = '1st Year' | '2nd Year' | '3rd Year' | '4th Year';
+
+export interface SemesterDefinition {
+  name: string; // e.g. 'Semester 1'
+  number: number; // e.g. 1
+  label: string; // e.g. 'Semester 1'
+}
+
+export const YEAR_SEMESTERS: Record<UndergraduateYear, SemesterDefinition[]> = {
+  '1st Year': [
+    { name: 'Semester 1', number: 1, label: 'Semester 1' },
+    { name: 'Semester 2', number: 2, label: 'Semester 2' }
+  ],
+  '2nd Year': [
+    { name: 'Semester 3', number: 3, label: 'Semester 3' },
+    { name: 'Semester 4', number: 4, label: 'Semester 4' }
+  ],
+  '3rd Year': [
+    { name: 'Semester 5', number: 5, label: 'Semester 5' },
+    { name: 'Semester 6', number: 6, label: 'Semester 6' }
+  ],
+  '4th Year': [
+    { name: 'Semester 7', number: 7, label: 'Semester 7' },
+    { name: 'Semester 8', number: 8, label: 'Semester 8' }
+  ]
+};
+
 export interface Subject {
   subjectId: string;
   code: string;
@@ -96,8 +123,10 @@ export interface Subject {
   labBlockHours?: number; // e.g. 2, 3, or 4
   departmentId: string;
   academicYear: string;
-  yearOfStudy?: '1st Year' | '2nd Year' | '3rd Year' | '4th Year';
+  yearOfStudy?: UndergraduateYear;
   semester?: string; // e.g. 'Semester 1', 'Semester 2', etc.
+  semesterNumber?: number; // Canonical semester number: 1 to 8
+  requiresSemesterReview?: boolean; // Set when an existing subject has no semester assigned
   status: 'ACTIVE' | 'INACTIVE';
   createdAt: string;
   updatedAt: string;
