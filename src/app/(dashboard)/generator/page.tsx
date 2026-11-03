@@ -32,6 +32,7 @@ import {
   PublishedTimetable
 } from '../../../types';
 import TimetableGrid from '../../../components/TimetableGrid';
+import Modal from '../../../components/Modal';
 import { useAuth } from '../../../lib/context/AuthContext';
 import {
   Cpu,
@@ -1262,149 +1263,120 @@ export default function GeneratorPage() {
         )}
       </div>
 
-      {/* 8. LOCK & PUBLISH CONFIRMATION MODAL (Workstream B8) */}
-      {publishModalOpen && (
-        <div className="fixed inset-0 bg-slate-900/40 backdrop-blur-xs flex items-center justify-center p-4 z-50">
-          <div className="bg-white rounded-2xl max-w-md w-full p-6 shadow-xl border border-slate-100 animate-in fade-in zoom-in-95 duration-100">
-            <div className="flex items-center gap-3 mb-2">
-              <div className="w-10 h-10 rounded-xl bg-emerald-50 text-emerald-600 flex items-center justify-center">
-                <Lock className="w-5 h-5" />
-              </div>
-              <div>
-                <h3 className="text-base font-extrabold text-slate-900">
-                  Lock & Publish Timetable
-                </h3>
-                <p className="text-xs text-slate-500">
-                  {selectedClass ? `${selectedClass.yearOfStudy} — Section ${selectedClass.section}` : ''}
-                </p>
-              </div>
-            </div>
+      {/* 8. LOCK & PUBLISH CONFIRMATION MODAL */}
+      <Modal
+        isOpen={publishModalOpen}
+        onClose={() => setPublishModalOpen(false)}
+        title="Lock & Publish Timetable"
+        badge={selectedClass ? `${selectedClass.yearOfStudy} — Section ${selectedClass.section}` : ''}
+        icon={<Lock className="w-5 h-5 text-white" />}
+        maxWidth="md"
+        footer={
+          <div className="flex items-center justify-end gap-2 w-full">
+            <button
+              type="button"
+              onClick={() => setPublishModalOpen(false)}
+              className="px-5 py-2.5 text-xs font-bold text-slate-600 hover:text-slate-900 hover:bg-slate-100 rounded-xl transition-colors cursor-pointer border border-slate-200/80 bg-white shadow-2xs"
+            >
+              Cancel
+            </button>
+            <button
+              type="button"
+              onClick={handlePublish}
+              disabled={publishing}
+              className="inline-flex items-center gap-1.5 px-6 py-2.5 text-xs font-bold text-white bg-emerald-600 hover:bg-emerald-700 disabled:opacity-50 rounded-xl transition-colors shadow-xs cursor-pointer"
+            >
+              <Lock className="w-3.5 h-3.5" />
+              <span>{publishing ? 'Publishing...' : 'Confirm & Publish'}</span>
+            </button>
+          </div>
+        }
+      >
+        <div className="space-y-3 py-1 text-xs">
+          <div className="flex justify-between py-1 border-b border-slate-100">
+            <span className="text-slate-500 font-medium">Department:</span>
+            <span className="font-bold text-slate-800">{selectedDeptObj?.name || selectedDept}</span>
+          </div>
+          <div className="flex justify-between py-1 border-b border-slate-100">
+            <span className="text-slate-500 font-medium">Academic Year:</span>
+            <span className="font-bold text-slate-800">{academicYear}</span>
+          </div>
+          <div className="flex justify-between py-1 border-b border-slate-100">
+            <span className="text-slate-500 font-medium">Class Section:</span>
+            <span className="font-bold text-slate-800">{selectedClass?.yearOfStudy} Sec {selectedClass?.section}</span>
+          </div>
+          <div className="flex justify-between py-1 border-b border-slate-100">
+            <span className="text-slate-500 font-medium">Total Hours Allocated:</span>
+            <span className="font-bold text-emerald-700">{totalAllocated} hrs</span>
+          </div>
+          <div className="flex justify-between py-1 border-b border-slate-100">
+            <span className="text-slate-500 font-medium">Clash Validation:</span>
+            <span className="font-bold text-emerald-700 flex items-center gap-1">
+              <CheckCircle2 className="w-3.5 h-3.5" />
+              <span>0 Global Clashes</span>
+            </span>
+          </div>
 
-            <div className="space-y-3 py-3 border-y border-slate-100 my-4 text-xs">
-              <div className="flex justify-between">
-                <span className="text-slate-500">Department:</span>
-                <span className="font-bold text-slate-800">{selectedDeptObj?.name || selectedDept}</span>
-              </div>
-              <div className="flex justify-between">
-                <span className="text-slate-500">Academic Year:</span>
-                <span className="font-bold text-slate-800">{academicYear}</span>
-              </div>
-              <div className="flex justify-between">
-                <span className="text-slate-500">Class Section:</span>
-                <span className="font-bold text-slate-800">{selectedClass?.yearOfStudy} Sec {selectedClass?.section}</span>
-              </div>
-              <div className="flex justify-between">
-                <span className="text-slate-500">Total Hours Allocated:</span>
-                <span className="font-bold text-emerald-700">{totalAllocated} hrs</span>
-              </div>
-              <div className="flex justify-between">
-                <span className="text-slate-500">Clash Validation:</span>
-                <span className="font-bold text-emerald-700 flex items-center gap-1">
-                  <CheckCircle2 className="w-3.5 h-3.5" />
-                  <span>0 Global Clashes</span>
-                </span>
-              </div>
-
-              <div className="p-3 bg-emerald-50/80 border border-emerald-200 rounded-xl text-emerald-900 text-[11px] leading-relaxed">
-                Publishing creates an immutable permanent snapshot in the institutional archives. Students and faculty can view this version in Timetable Views.
-              </div>
-            </div>
-
-            <div className="flex justify-end gap-3 pt-2">
-              <button
-                type="button"
-                onClick={() => setPublishModalOpen(false)}
-                className="px-4 py-2 text-xs font-semibold text-slate-600 hover:bg-slate-100 rounded-xl transition-colors cursor-pointer"
-              >
-                Cancel
-              </button>
-              <button
-                type="button"
-                onClick={handlePublish}
-                disabled={publishing}
-                className="inline-flex items-center gap-1.5 px-4 py-2 text-xs font-bold text-white bg-emerald-600 hover:bg-emerald-700 disabled:opacity-50 rounded-xl transition-colors shadow-xs cursor-pointer"
-              >
-                <Lock className="w-3.5 h-3.5" />
-                <span>{publishing ? 'Publishing...' : 'Confirm & Publish'}</span>
-              </button>
-            </div>
+          <div className="p-3.5 bg-emerald-50/80 border border-emerald-200 rounded-2xl text-emerald-900 text-[11px] leading-relaxed mt-2">
+            Publishing creates an immutable permanent snapshot in the institutional archives. Students and faculty can view this version in Timetable Views.
           </div>
         </div>
-      )}
+      </Modal>
 
       {/* 9. CLEAR / CHANGE SELECTION CONFIRMATION MODAL */}
-      {clearConfirmOpen && (
-        <div
-          className="fixed inset-0 bg-slate-900/40 backdrop-blur-xs flex items-center justify-center p-4 z-50 animate-in fade-in duration-150"
-          role="dialog"
-          aria-modal="true"
-          aria-labelledby="clear-selection-title"
-          onClick={(e) => {
-            if (e.target === e.currentTarget) setClearConfirmOpen(false);
-          }}
-        >
-          <div className="bg-white rounded-2xl max-w-md w-full p-6 shadow-2xl border border-slate-100 animate-in zoom-in-95 duration-150 space-y-4">
-            <div className="flex items-center gap-3">
-              <div className="w-10 h-10 rounded-xl bg-indigo-50 text-[#3431B7] flex items-center justify-center shrink-0">
-                <SlidersHorizontal className="w-5 h-5" />
-              </div>
-              <div className="min-w-0">
-                <h3 id="clear-selection-title" className="text-base font-extrabold text-slate-900 leading-snug">
-                  Clear / Change Selection
-                </h3>
-                <p className="text-xs text-slate-500 truncate">
-                  {selectedDeptObj ? `${selectedDeptObj.name}` : ''}
-                  {selectedClass ? ` • ${selectedClass.yearOfStudy} Section ${selectedClass.section}` : ` • ${selectedYearOfStudy}`}
-                </p>
-              </div>
+      <Modal
+        isOpen={clearConfirmOpen}
+        onClose={() => setClearConfirmOpen(false)}
+        title="Clear / Change Selection"
+        badge={selectedClass ? `${selectedClass.yearOfStudy} Section ${selectedClass.section}` : selectedYearOfStudy}
+        icon={<SlidersHorizontal className="w-5 h-5 text-white" />}
+        maxWidth="md"
+        footer={
+          <div className="flex items-center justify-end gap-2 w-full">
+            <button
+              type="button"
+              onClick={() => setClearConfirmOpen(false)}
+              className="px-5 py-2.5 text-xs font-bold text-slate-600 hover:text-slate-900 hover:bg-slate-100 rounded-xl transition-colors cursor-pointer border border-slate-200/80 bg-white shadow-2xs"
+            >
+              Cancel
+            </button>
+            <button
+              type="button"
+              onClick={handleConfirmClearSelection}
+              className="inline-flex items-center gap-1.5 px-6 py-2.5 text-xs font-bold text-white bg-[#3431B7] hover:bg-[#282694] rounded-xl transition-colors shadow-xs cursor-pointer"
+            >
+              <RotateCcw className="w-3.5 h-3.5" />
+              <span>Confirm & Change Selection</span>
+            </button>
+          </div>
+        }
+      >
+        <div className="space-y-3.5 text-xs text-slate-600">
+          <p className="leading-relaxed">
+            You are about to exit the current timetable workspace for{' '}
+            <strong className="text-slate-900">
+              {selectedClass ? `${selectedClass.yearOfStudy} — Section ${selectedClass.section}` : selectedYearOfStudy}
+            </strong>
+            . This clears the active workspace view and returns you to the Academic Year and Section selection flow.
+          </p>
+
+          {/* Warning: Unsaved local in-memory adjustments */}
+          <div className="p-3.5 bg-amber-50/80 border border-amber-200/90 rounded-2xl text-amber-900 text-[11px] leading-relaxed flex items-start gap-2.5">
+            <AlertTriangle className="w-4 h-4 text-amber-600 shrink-0 mt-0.5" />
+            <div>
+              <span className="font-bold">Unpublished Preview Discard:</span> The current in-memory generated preview will be completely discarded. Generated timetables are only saved when explicitly locked and published.
             </div>
+          </div>
 
-            <div className="space-y-3 py-1 text-xs text-slate-600">
-              <p className="leading-relaxed">
-                You are about to exit the current timetable workspace for{' '}
-                <strong className="text-slate-900">
-                  {selectedClass ? `${selectedClass.yearOfStudy} — Section ${selectedClass.section}` : selectedYearOfStudy}
-                </strong>
-                . This clears the active workspace view and returns you to the Academic Year and Section selection flow.
-              </p>
-
-              {/* Warning: Unsaved local in-memory adjustments */}
-              <div className="p-3 bg-amber-50/80 border border-amber-200/90 rounded-xl text-amber-900 text-[11px] leading-relaxed flex items-start gap-2.5">
-                <AlertTriangle className="w-4 h-4 text-amber-600 shrink-0 mt-0.5" />
-                <div>
-                  <span className="font-bold">Unpublished Preview Discard:</span> The current in-memory generated preview will be completely discarded. Generated timetables are only saved when explicitly locked and published.
-                </div>
-              </div>
-
-              {/* Data Safety Assurance */}
-              <div className="p-3 bg-emerald-50/80 border border-emerald-200/90 rounded-xl text-emerald-900 text-[11px] leading-relaxed flex items-start gap-2.5">
-                <ShieldCheck className="w-4 h-4 text-emerald-600 shrink-0 mt-0.5" />
-                <div>
-                  <span className="font-bold">Data Safety Guaranteed:</span> All officially locked timetables and published institutional archives remain permanently stored in Firestore. No records will be deleted.
-                </div>
-              </div>
-            </div>
-
-            <div className="flex items-center justify-end gap-3 pt-3 border-t border-slate-100">
-              <button
-                type="button"
-                onClick={() => setClearConfirmOpen(false)}
-                className="px-4 py-2 text-xs font-semibold text-slate-600 hover:text-slate-800 hover:bg-slate-100 rounded-xl transition-colors cursor-pointer"
-              >
-                Cancel
-              </button>
-              <button
-                type="button"
-                onClick={handleConfirmClearSelection}
-                className="inline-flex items-center gap-1.5 px-4 py-2 text-xs font-bold text-white bg-[#3431B7] hover:bg-[#282694] rounded-xl transition-colors shadow-xs cursor-pointer"
-              >
-                <RotateCcw className="w-3.5 h-3.5" />
-                <span>Confirm & Change Selection</span>
-              </button>
+          {/* Data Safety Assurance */}
+          <div className="p-3.5 bg-emerald-50/80 border border-emerald-200/90 rounded-2xl text-emerald-900 text-[11px] leading-relaxed flex items-start gap-2.5">
+            <ShieldCheck className="w-4 h-4 text-emerald-600 shrink-0 mt-0.5" />
+            <div>
+              <span className="font-bold">Data Safety Guaranteed:</span> All officially locked timetables and published institutional archives remain permanently stored in Firestore. No records will be deleted.
             </div>
           </div>
         </div>
-      )}
+      </Modal>
     </div>
   );
 }

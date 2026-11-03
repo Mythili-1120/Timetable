@@ -60,6 +60,7 @@ import {
 } from '../../../../types';
 import { useAuth } from '../../../../lib/context/AuthContext';
 import DepartmentIcon from '../../../../components/DepartmentIcon';
+import Modal from '../../../../components/Modal';
 import {
   Building2,
   Users,
@@ -2317,153 +2318,23 @@ export default function DepartmentDetailPage() {
       {/* ========================================================= */}
       {/* MODAL: SECTION-WISE TIMETABLE SETUP FLOW (Workstream B2)  */}
       {/* ========================================================= */}
-      {setupModalOpen && (
-        <div className="fixed inset-0 bg-slate-900/40 backdrop-blur-xs flex items-center justify-center p-4 z-50">
-          <div className="bg-white rounded-2xl max-w-lg w-full p-6 shadow-xl border border-slate-100 animate-in fade-in zoom-in-95 duration-100">
-            <div className="flex items-start justify-between mb-4">
-              <div className="flex items-center gap-3">
-                <div className="w-10 h-10 rounded-xl bg-[#EEF0FA] text-[#3431B7] flex items-center justify-center shrink-0">
-                  <Cpu className="w-5 h-5" />
-                </div>
-                <div>
-                  <h3 className="text-lg font-bold text-slate-900">
-                    Section-wise Timetable Generator
-                  </h3>
-                  <p className="text-xs text-slate-500">
-                    Department: <span className="font-semibold text-slate-800">{department.name}</span>
-                  </p>
-                </div>
-              </div>
-              <button
-                onClick={() => setSetupModalOpen(false)}
-                className="p-1 rounded-lg text-slate-400 hover:text-slate-600 hover:bg-slate-100 transition-colors"
-              >
-                <X className="w-5 h-5" />
-              </button>
-            </div>
-
-            <div className="space-y-4 text-xs">
-              {/* Step 1: Academic Year Selection */}
-              <div>
-                <label className="block text-xs font-semibold uppercase tracking-wider text-slate-700 mb-2">
-                  Step 1: Which Academic Year do you want to generate a timetable for?
-                </label>
-                <div className="grid grid-cols-2 gap-2">
-                  {UNDERGRADUATE_YEARS.map(yr => {
-                    const prog = getYearProgress(yr);
-                    const isSelected = setupSelectedYear === yr;
-
-                    return (
-                      <button
-                        key={yr}
-                        type="button"
-                        onClick={() => setSetupSelectedYear(yr)}
-                        className={`p-3 rounded-xl border text-left transition-all cursor-pointer ${
-                          isSelected
-                            ? 'border-[#3431B7] bg-[#EEF0FA]/60 shadow-xs'
-                            : 'border-slate-200 hover:border-slate-300 hover:bg-slate-50'
-                        }`}
-                      >
-                        <div className="flex items-center justify-between mb-1">
-                          <span className={`font-bold ${isSelected ? 'text-[#3431B7]' : 'text-slate-900'}`}>
-                            {yr}
-                          </span>
-                          <span
-                            className={`text-[9px] font-bold px-1.5 py-0.5 rounded-full ${
-                              prog.status === 'COMPLETED'
-                                ? 'bg-emerald-100 text-emerald-800'
-                                : prog.status === 'IN_PROGRESS'
-                                ? 'bg-amber-100 text-amber-800'
-                                : 'bg-slate-100 text-slate-600'
-                            }`}
-                          >
-                            {prog.text}
-                          </span>
-                        </div>
-                        <span className="text-[10px] text-slate-400">
-                          {classes.filter(c => c.yearOfStudy === yr).length} Sections configured
-                        </span>
-                      </button>
-                    );
-                  })}
-                </div>
-              </div>
-
-              {/* Step 2: Section Selection */}
-              <div>
-                <label className="block text-xs font-semibold uppercase tracking-wider text-slate-700 mb-2">
-                  Step 2: Select Section ({setupSelectedYear})
-                </label>
-                {(() => {
-                  const yearClasses = classes.filter(c => c.yearOfStudy === setupSelectedYear);
-
-                  if (yearClasses.length === 0) {
-                    return (
-                      <div className="p-4 rounded-xl border border-dashed border-amber-300 bg-amber-50/60 text-center text-amber-900">
-                        <AlertTriangle className="w-5 h-5 mx-auto mb-1 text-amber-600" />
-                        <p className="font-bold">No sections configured for {setupSelectedYear}.</p>
-                        <p className="text-[11px] text-amber-700 mt-0.5">
-                          Please go to the "Academic Years & Sections" tab to add Section A first.
-                        </p>
-                      </div>
-                    );
-                  }
-
-                  return (
-                    <div className="space-y-2">
-                      {yearClasses.map(cls => {
-                        const status = getSectionTimetableStatus(cls.classId);
-                        const isSelected = setupSelectedClassId === cls.classId;
-
-                        return (
-                          <div
-                            key={cls.classId}
-                            onClick={() => setSetupSelectedClassId(cls.classId)}
-                            className={`p-3 rounded-xl border flex items-center justify-between transition-all cursor-pointer ${
-                              isSelected
-                                ? 'border-[#3431B7] bg-[#EEF0FA]/60 shadow-xs'
-                                : 'border-slate-200 hover:border-slate-300 hover:bg-slate-50'
-                            }`}
-                          >
-                            <div className="flex items-center gap-2.5">
-                              <div className="w-7 h-7 rounded-lg bg-white border border-[#E3E5F0] text-[#3431B7] font-bold text-xs flex items-center justify-center">
-                                {cls.section}
-                              </div>
-                              <div>
-                                <div className="font-bold text-slate-900">
-                                  Section {cls.section}
-                                </div>
-                                <div className="text-[10px] text-slate-500 font-mono">
-                                  {cls.classId}
-                                </div>
-                              </div>
-                            </div>
-
-                            <span
-                              className={`text-[10px] font-bold px-2 py-0.5 rounded-full ${
-                                status === 'LOCKED'
-                                  ? 'bg-emerald-100 text-emerald-800 border border-emerald-200'
-                                  : status === 'DRAFT'
-                                  ? 'bg-indigo-100 text-indigo-800 border border-indigo-200'
-                                  : 'bg-slate-100 text-slate-600 border border-slate-200'
-                              }`}
-                            >
-                              {status === 'LOCKED' ? 'Locked / Published' : status === 'DRAFT' ? 'Draft Available' : 'Not Generated'}
-                            </span>
-                          </div>
-                        );
-                      })}
-                    </div>
-                  );
-                })()}
-              </div>
-            </div>
-
-            <div className="flex justify-end gap-3 pt-4 border-t border-slate-100 mt-5">
+      <Modal
+        isOpen={setupModalOpen}
+        onClose={() => setSetupModalOpen(false)}
+        title="Section-wise Timetable Generator"
+        badge={`Dept: ${department.code || department.name}`}
+        icon={<Cpu className="w-5 h-5 text-white" />}
+        maxWidth="lg"
+        footer={
+          <>
+            <span className="text-xs text-slate-400 font-medium">
+              {setupSelectedClassId ? 'Ready to open workspace' : 'Select a section to proceed'}
+            </span>
+            <div className="flex items-center gap-2">
               <button
                 type="button"
                 onClick={() => setSetupModalOpen(false)}
-                className="px-4 py-2 text-sm font-semibold text-slate-600 hover:bg-slate-100 rounded-lg transition-colors cursor-pointer"
+                className="px-4 py-2 text-xs font-semibold text-slate-600 hover:bg-slate-200/60 rounded-xl transition-colors cursor-pointer"
               >
                 Cancel
               </button>
@@ -2476,259 +2347,473 @@ export default function DepartmentDetailPage() {
                     `/generator?departmentId=${departmentId}&classId=${encodeURIComponent(setupSelectedClassId)}&academicYear=2025–2026&yearOfStudy=${encodeURIComponent(setupSelectedYear)}`
                   );
                 }}
-                className="inline-flex items-center gap-2 px-4 py-2 text-sm font-semibold text-white bg-[#3431B7] hover:bg-[#28229E] disabled:opacity-50 disabled:cursor-not-allowed rounded-lg transition-colors shadow-xs cursor-pointer"
+                className="inline-flex items-center gap-2 px-5 py-2 text-xs font-bold text-white bg-[#3431B7] hover:bg-[#282694] disabled:opacity-50 disabled:cursor-not-allowed rounded-xl transition-colors shadow-xs cursor-pointer"
               >
                 <span>Open Timetable Workspace</span>
                 <ArrowRight className="w-4 h-4" />
               </button>
             </div>
+          </>
+        }
+      >
+        <div className="space-y-5 text-xs">
+          {/* Step 1: Academic Year Selection */}
+          <div>
+            <div className="text-[11px] font-bold text-slate-400 tracking-wider uppercase mb-2">
+              Step 1: Academic Year Level
+            </div>
+            <div className="grid grid-cols-2 gap-2.5">
+              {UNDERGRADUATE_YEARS.map(yr => {
+                const prog = getYearProgress(yr);
+                const isSelected = setupSelectedYear === yr;
+
+                return (
+                  <button
+                    key={yr}
+                    type="button"
+                    onClick={() => setSetupSelectedYear(yr)}
+                    className={`p-3 rounded-2xl border text-left transition-all cursor-pointer ${
+                      isSelected
+                        ? 'border-[#3431B7] bg-[#EEF0FA]/60 shadow-xs ring-1 ring-[#3431B7]'
+                        : 'border-slate-200 hover:border-slate-300 hover:bg-slate-50'
+                    }`}
+                  >
+                    <div className="flex items-center justify-between mb-1">
+                      <span className={`font-bold ${isSelected ? 'text-[#3431B7]' : 'text-slate-900'}`}>
+                        {yr}
+                      </span>
+                      <span
+                        className={`text-[9px] font-bold px-2 py-0.5 rounded-full ${
+                          prog.status === 'COMPLETED'
+                            ? 'bg-emerald-100 text-emerald-800'
+                            : prog.status === 'IN_PROGRESS'
+                            ? 'bg-amber-100 text-amber-800'
+                            : 'bg-slate-100 text-slate-600'
+                        }`}
+                      >
+                        {prog.text}
+                      </span>
+                    </div>
+                    <span className="text-[10px] text-slate-400">
+                      {classes.filter(c => c.yearOfStudy === yr).length} Sections configured
+                    </span>
+                  </button>
+                );
+              })}
+            </div>
+          </div>
+
+          {/* Step 2: Section Selection */}
+          <div>
+            <div className="text-[11px] font-bold text-slate-400 tracking-wider uppercase mb-2">
+              Step 2: Select Section ({setupSelectedYear})
+            </div>
+            {(() => {
+              const yearClasses = classes.filter(c => c.yearOfStudy === setupSelectedYear);
+
+              if (yearClasses.length === 0) {
+                return (
+                  <div className="p-4 rounded-2xl border border-dashed border-amber-300 bg-amber-50/60 text-center text-amber-900">
+                    <AlertTriangle className="w-5 h-5 mx-auto mb-1 text-amber-600" />
+                    <p className="font-bold">No sections configured for {setupSelectedYear}.</p>
+                    <p className="text-[11px] text-amber-700 mt-0.5">
+                      Please go to the "Academic Years & Sections" tab to add Section A first.
+                    </p>
+                  </div>
+                );
+              }
+
+              return (
+                <div className="space-y-2">
+                  {yearClasses.map(cls => {
+                    const status = getSectionTimetableStatus(cls.classId);
+                    const isSelected = setupSelectedClassId === cls.classId;
+
+                    return (
+                      <div
+                        key={cls.classId}
+                        onClick={() => setSetupSelectedClassId(cls.classId)}
+                        className={`p-3 rounded-2xl border flex items-center justify-between transition-all cursor-pointer ${
+                          isSelected
+                            ? 'border-[#3431B7] bg-[#EEF0FA]/60 shadow-xs ring-1 ring-[#3431B7]'
+                            : 'border-slate-200 hover:border-slate-300 hover:bg-slate-50'
+                        }`}
+                      >
+                        <div className="flex items-center gap-2.5">
+                          <div className="w-8 h-8 rounded-xl bg-white border border-[#E3E5F0] text-[#3431B7] font-bold text-xs flex items-center justify-center shadow-2xs">
+                            {cls.section}
+                          </div>
+                          <div>
+                            <div className="font-bold text-slate-900">
+                              Section {cls.section}
+                            </div>
+                            <div className="text-[10px] text-slate-500 font-mono">
+                              {cls.classId}
+                            </div>
+                          </div>
+                        </div>
+
+                        <span
+                          className={`text-[10px] font-bold px-2.5 py-0.5 rounded-full ${
+                            status === 'LOCKED'
+                              ? 'bg-emerald-100 text-emerald-800 border border-emerald-200'
+                              : status === 'DRAFT'
+                              ? 'bg-indigo-100 text-indigo-800 border border-indigo-200'
+                              : 'bg-slate-100 text-slate-600 border border-slate-200'
+                          }`}
+                        >
+                          {status === 'LOCKED' ? 'Locked / Published' : status === 'DRAFT' ? 'Draft Available' : 'Not Generated'}
+                        </span>
+                      </div>
+                    );
+                  })}
+                </div>
+              );
+            })()}
           </div>
         </div>
-      )}
+      </Modal>
 
       {/* ========================================================= */}
       {/* MODAL 1: ADD / EDIT STAFF                                 */}
       {/* ========================================================= */}
-      {staffModalOpen && (
-        <div className="fixed inset-0 bg-slate-900/40 backdrop-blur-xs flex items-center justify-center p-4 z-50">
-          <div className="bg-white rounded-2xl max-w-xl w-full p-6 shadow-xl border border-slate-100 animate-in fade-in zoom-in-95 duration-100 max-h-[90vh] overflow-y-auto">
-            <h3 className="text-lg font-bold text-slate-900 mb-1">
-              {editingStaff ? `Edit Faculty — ${editingStaff.memberId}` : 'Add Department Faculty'}
-            </h3>
-            <p className="text-xs text-slate-500 mb-4">
-              {editingStaff
-                ? 'Update contact details, designation, or qualified subjects. Member ID remains permanent.'
-                : 'Create a new faculty profile or link an existing faculty member from another department.'}
-            </p>
-
-            {modalError && (
-              <div className="mb-4 p-3 bg-rose-50 border border-rose-200 rounded-lg text-xs text-rose-700 font-medium">
-                {modalError}
+      <Modal
+        isOpen={staffModalOpen}
+        onClose={() => setStaffModalOpen(false)}
+        title={editingStaff ? 'Edit Staff Member' : 'Add Department Faculty'}
+        badge={editingStaff ? editingStaff.memberId : staffAddMode === 'new' ? 'New Faculty' : 'Cross-Dept Link'}
+        icon={
+          editingStaff ? (
+            <span className="font-black text-sm">
+              {editingStaff.initials || editingStaff.displayName?.charAt(0) || 'F'}
+            </span>
+          ) : (
+            <UserPlus className="w-5 h-5 text-white" />
+          )
+        }
+        maxWidth="xl"
+        footer={
+          <>
+            <span className="text-xs text-slate-400 font-medium">* Required</span>
+            <div className="flex items-center gap-2">
+              <button
+                type="button"
+                onClick={() => setStaffModalOpen(false)}
+                className="px-4 py-2 text-xs font-semibold text-slate-600 hover:bg-slate-200/60 rounded-xl transition-colors cursor-pointer"
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                onClick={handleSaveStaff}
+                disabled={saving || (staffAddMode === 'link' && linkableStaff.length === 0)}
+                className="inline-flex items-center gap-1.5 px-5 py-2 text-xs font-bold text-white bg-[#3431B7] hover:bg-[#282694] disabled:opacity-50 disabled:cursor-not-allowed rounded-xl transition-colors shadow-xs cursor-pointer"
+              >
+                <Check className="w-3.5 h-3.5 stroke-[3]" />
+                <span>
+                  {saving ? 'Saving...' : editingStaff ? 'Save changes' : staffAddMode === 'new' ? 'Generate ID & Save' : 'Link Faculty Member'}
+                </span>
+              </button>
+            </div>
+          </>
+        }
+      >
+        <div className="space-y-4">
+          {/* Top Banner Notice matching template */}
+          {editingStaff ? (
+            <div className="flex items-center gap-3 p-3.5 rounded-2xl bg-indigo-50/70 border border-indigo-100/90 text-xs text-[#282694]">
+              <div className="w-8 h-8 rounded-xl bg-[#3431B7] text-white flex items-center justify-center shrink-0 shadow-2xs">
+                <Lock className="w-4 h-4" />
               </div>
-            )}
-
-            {!editingStaff && (
-              <div className="grid grid-cols-2 gap-2 p-1 bg-slate-100 rounded-xl mb-4 text-xs font-semibold">
-                <button
-                  type="button"
-                  onClick={() => setStaffAddMode('new')}
-                  className={`py-2 px-3 rounded-lg transition-all cursor-pointer ${
-                    staffAddMode === 'new'
-                      ? 'bg-white text-[#3431B7] shadow-xs'
-                      : 'text-slate-600 hover:text-slate-900'
-                  }`}
-                >
-                  <UserPlus className="w-3.5 h-3.5 inline mr-1.5" />
-                  New Faculty Profile
-                </button>
-                <button
-                  type="button"
-                  onClick={() => {
-                    setStaffAddMode('link');
-                    if (linkableStaff.length > 0 && !selectedExistingStaffId) {
-                      setSelectedExistingStaffId(linkableStaff[0].memberId);
-                    }
-                  }}
-                  className={`py-2 px-3 rounded-lg transition-all cursor-pointer ${
-                    staffAddMode === 'link'
-                      ? 'bg-white text-indigo-700 shadow-xs'
-                      : 'text-slate-600 hover:text-slate-900'
-                  }`}
-                >
-                  <LinkIcon className="w-3.5 h-3.5 inline mr-1.5" />
-                  Link Existing ({linkableStaff.length})
-                </button>
+              <div className="min-w-0">
+                <div className="font-bold text-slate-900">
+                  Member ID {editingStaff.memberId} is permanent
+                </div>
+                <div className="text-slate-500 text-[11px]">
+                  It is unique across SSM Institute and cannot be changed in any department.
+                </div>
               </div>
-            )}
+            </div>
+          ) : (
+            <div className="grid grid-cols-2 gap-2 p-1 bg-slate-100 rounded-xl text-xs font-semibold">
+              <button
+                type="button"
+                onClick={() => setStaffAddMode('new')}
+                className={`py-2 px-3 rounded-lg transition-all cursor-pointer ${
+                  staffAddMode === 'new'
+                    ? 'bg-white text-[#3431B7] shadow-xs'
+                    : 'text-slate-600 hover:text-slate-900'
+                }`}
+              >
+                <UserPlus className="w-3.5 h-3.5 inline mr-1.5" />
+                New Faculty Profile
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  setStaffAddMode('link');
+                  if (linkableStaff.length > 0 && !selectedExistingStaffId) {
+                    setSelectedExistingStaffId(linkableStaff[0].memberId);
+                  }
+                }}
+                className={`py-2 px-3 rounded-lg transition-all cursor-pointer ${
+                  staffAddMode === 'link'
+                    ? 'bg-white text-indigo-700 shadow-xs'
+                    : 'text-slate-600 hover:text-slate-900'
+                }`}
+              >
+                <LinkIcon className="w-3.5 h-3.5 inline mr-1.5" />
+                Link Existing ({linkableStaff.length})
+              </button>
+            </div>
+          )}
 
-            <form onSubmit={handleSaveStaff} className="space-y-4">
-              {staffAddMode === 'new' || editingStaff ? (
-                <>
+          {modalError && (
+            <div className="p-3 bg-rose-50 border border-rose-200 rounded-xl text-xs text-rose-700 font-medium flex items-center gap-2">
+              <AlertTriangle className="w-4 h-4 shrink-0" />
+              <span>{modalError}</span>
+            </div>
+          )}
+
+          <form onSubmit={handleSaveStaff} className="space-y-4">
+            {staffAddMode === 'new' || editingStaff ? (
+              <>
+                {/* SECTION 1: BASIC DETAILS */}
+                <div className="space-y-2">
+                  <div className="text-[11px] font-bold text-slate-400 tracking-wider uppercase">
+                    Basic Details
+                  </div>
                   <div className="grid grid-cols-3 gap-3">
                     <div className="col-span-2">
-                      <label className="block text-xs font-semibold uppercase tracking-wider text-slate-700 mb-1">
-                        Full Name *
+                      <label className="block text-xs font-semibold text-slate-700 mb-1">
+                        Full name *
                       </label>
                       <input
                         type="text"
                         required
-                        placeholder="e.g. Ramesh, Priya, Suresh"
+                        placeholder="e.g. Bhuvan"
                         value={staffName}
                         onChange={(e) => setStaffName(e.target.value)}
-                        className="w-full px-3 py-2 text-sm border border-slate-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-[#3431B7]"
+                        className="w-full px-3 py-2 text-xs border border-slate-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-[#3431B7]/20 focus:border-[#3431B7] transition-all bg-white"
                       />
                     </div>
                     <div>
-                      <label className="block text-xs font-semibold uppercase tracking-wider text-slate-700 mb-1">
+                      <label className="block text-xs font-semibold text-slate-700 mb-1">
                         Initials
                       </label>
                       <input
                         type="text"
-                        placeholder="e.g. R, K"
+                        placeholder="e.g. S"
                         value={staffInitials}
                         onChange={(e) => setStaffInitials(e.target.value)}
-                        className="w-full px-3 py-2 text-sm border border-slate-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-[#3431B7] uppercase"
+                        className="w-full px-3 py-2 text-xs border border-slate-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-[#3431B7]/20 focus:border-[#3431B7] transition-all bg-white uppercase font-bold"
                       />
                     </div>
                   </div>
+                </div>
 
+                {/* SECTION 2: CONTACT */}
+                <div className="space-y-2">
+                  <div className="text-[11px] font-bold text-slate-400 tracking-wider uppercase">
+                    Contact
+                  </div>
                   <div className="grid grid-cols-2 gap-3">
                     <div>
-                      <label className="block text-xs font-semibold uppercase tracking-wider text-slate-700 mb-1">
-                        Designation <span className="text-[10px] text-slate-400 font-normal lowercase">(optional)</span>
+                      <div className="flex items-center justify-between mb-1">
+                        <label className="text-xs font-semibold text-slate-700">Phone number</label>
+                        {!staffPhone && (
+                          <span className="text-[10px] font-bold text-amber-700 bg-amber-50 px-1.5 py-0.5 rounded border border-amber-200/60">
+                            Missing
+                          </span>
+                        )}
+                      </div>
+                      <div className="flex items-center gap-1.5">
+                        <span className="px-2.5 py-2 text-xs font-bold text-slate-600 bg-slate-100 border border-slate-200 rounded-xl">
+                          +91
+                        </span>
+                        <input
+                          type="tel"
+                          placeholder="9876543210"
+                          value={staffPhone}
+                          onChange={(e) => setStaffPhone(e.target.value)}
+                          className="flex-1 px-3 py-2 text-xs border border-slate-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-[#3431B7]/20 focus:border-[#3431B7] transition-all bg-white"
+                        />
+                      </div>
+                    </div>
+                    <div>
+                      <label className="block text-xs font-semibold text-slate-700 mb-1">
+                        Email address
+                      </label>
+                      <input
+                        type="email"
+                        placeholder="faculty@ssmiet.ac.in"
+                        value={staffEmail}
+                        onChange={(e) => setStaffEmail(e.target.value)}
+                        className="w-full px-3 py-2 text-xs border border-slate-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-[#3431B7]/20 focus:border-[#3431B7] transition-all bg-white"
+                      />
+                    </div>
+                  </div>
+                  <p className="text-[10px] text-slate-400">10-digit mobile number, or +91 format</p>
+                </div>
+
+                {/* SECTION 3: WORK */}
+                <div className="space-y-2">
+                  <div className="text-[11px] font-bold text-slate-400 tracking-wider uppercase">
+                    Work
+                  </div>
+                  <div className="grid grid-cols-2 gap-3">
+                    <div>
+                      <label className="block text-xs font-semibold text-slate-700 mb-1">
+                        Primary department *
                       </label>
                       <input
                         type="text"
-                        placeholder="e.g. Professor, Assistant Professor, Lecturer"
-                        value={staffDesignation}
-                        onChange={(e) => setStaffDesignation(e.target.value)}
-                        className="w-full px-3 py-2 text-sm border border-slate-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-[#3431B7]"
+                        disabled
+                        value={`${department.code} — ${department.name}`}
+                        className="w-full px-3 py-2 text-xs border border-slate-200 rounded-xl bg-slate-50 text-slate-700 font-medium"
                       />
                     </div>
                     <div>
-                      <label className="block text-xs font-semibold uppercase tracking-wider text-slate-700 mb-1">
-                        Phone Number
+                      <label className="block text-xs font-semibold text-slate-700 mb-1">
+                        Designation
                       </label>
                       <input
-                        type="tel"
-                        placeholder="e.g. 9876543210"
-                        value={staffPhone}
-                        onChange={(e) => setStaffPhone(e.target.value)}
-                        className="w-full px-3 py-2 text-sm border border-slate-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-[#3431B7]"
+                        type="text"
+                        placeholder="Assistant Professor"
+                        value={staffDesignation}
+                        onChange={(e) => setStaffDesignation(e.target.value)}
+                        className="w-full px-3 py-2 text-xs border border-slate-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-[#3431B7]/20 focus:border-[#3431B7] transition-all bg-white"
                       />
                     </div>
                   </div>
-
-                  <div>
-                    <label className="block text-xs font-semibold uppercase tracking-wider text-slate-700 mb-1">
-                      Email Address
-                    </label>
-                    <input
-                      type="email"
-                      placeholder="faculty@ssmiet.ac.in"
-                      value={staffEmail}
-                      onChange={(e) => setStaffEmail(e.target.value)}
-                      className="w-full px-3 py-2 text-sm border border-slate-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-[#3431B7]"
-                    />
-                  </div>
-                </>
-              ) : (
-                /* Mode: Link Existing Faculty */
-                <div>
-                  <label className="block text-xs font-semibold uppercase tracking-wider text-slate-700 mb-1">
-                    Select Existing College Faculty Member
-                  </label>
-                  {linkableStaff.length === 0 ? (
-                    <div className="p-4 bg-slate-50 border border-slate-200 rounded-lg text-xs text-slate-500 text-center">
-                      All existing faculty members in the college are already linked to {department.code}.
-                    </div>
-                  ) : (
-                    <select
-                      value={selectedExistingStaffId}
-                      onChange={(e) => setSelectedExistingStaffId(e.target.value)}
-                      className="w-full px-3 py-2 text-sm border border-slate-300 rounded-lg bg-white font-medium text-slate-900 focus:outline-none focus:ring-2 focus:ring-[#3431B7]"
-                    >
-                      {linkableStaff.map(s => (
-                        <option key={s.memberId} value={s.memberId}>
-                          {s.displayName} ({s.memberId}) — Primary: {s.primaryDepartmentId.replace('dept-', '').toUpperCase()}
-                        </option>
-                      ))}
-                    </select>
-                  )}
-                  <p className="text-[11px] text-slate-500 mt-2">
-                    Linking an existing faculty member retains their permanent ID (<span className="font-mono font-bold text-slate-700">FAC-XXXXXX</span>) and enforces college-wide clash detection.
-                  </p>
                 </div>
-              )}
-
-              <div className="flex justify-end gap-3 pt-3 border-t border-slate-100">
-                <button
-                  type="button"
-                  onClick={() => setStaffModalOpen(false)}
-                  className="px-4 py-2 text-sm font-semibold text-slate-600 hover:bg-slate-100 rounded-lg transition-colors cursor-pointer"
-                >
-                  Cancel
-                </button>
-                <button
-                  type="submit"
-                  disabled={saving || (staffAddMode === 'link' && linkableStaff.length === 0)}
-                  className="px-4 py-2 text-sm font-semibold text-white bg-[#3431B7] hover:bg-[#28229E] disabled:opacity-50 disabled:cursor-not-allowed rounded-lg transition-colors cursor-pointer"
-                >
-                  {saving ? 'Saving...' : editingStaff ? 'Save Changes' : staffAddMode === 'new' ? 'Generate ID & Save' : 'Link Faculty Member'}
-                </button>
+              </>
+            ) : (
+              /* Mode: Link Existing Faculty */
+              <div className="space-y-3">
+                <div className="text-[11px] font-bold text-slate-400 tracking-wider uppercase">
+                  Select Existing College Faculty Member
+                </div>
+                {linkableStaff.length === 0 ? (
+                  <div className="p-4 bg-slate-50 border border-slate-200 rounded-2xl text-xs text-slate-500 text-center">
+                    All existing faculty members in the college are already linked to {department.code}.
+                  </div>
+                ) : (
+                  <select
+                    value={selectedExistingStaffId}
+                    onChange={(e) => setSelectedExistingStaffId(e.target.value)}
+                    className="w-full px-3 py-2 text-xs border border-slate-200 rounded-xl bg-white font-medium text-slate-900 focus:outline-none focus:ring-2 focus:ring-[#3431B7]/20 focus:border-[#3431B7]"
+                  >
+                    {linkableStaff.map(s => (
+                      <option key={s.memberId} value={s.memberId}>
+                        {s.displayName} ({s.memberId}) — Primary: {s.primaryDepartmentId.replace('dept-', '').toUpperCase()}
+                      </option>
+                    ))}
+                  </select>
+                )}
+                <p className="text-[11px] text-slate-500">
+                  Linking an existing faculty member retains their permanent ID (<span className="font-mono font-bold text-slate-700">FAC-XXXXXX</span>) and enforces college-wide clash detection.
+                </p>
               </div>
-            </form>
-          </div>
+            )}
+          </form>
         </div>
-      )}
+      </Modal>
 
       {/* ========================================================= */}
       {/* MODAL 2: ADD / EDIT SUBJECT                               */}
       {/* ========================================================= */}
-      {subjectModalOpen && (
-        <div className="fixed inset-0 bg-slate-900/40 backdrop-blur-xs flex items-center justify-center p-4 z-50">
-          <div className="bg-white rounded-2xl max-w-md w-full p-6 shadow-xl border border-slate-100 animate-in fade-in zoom-in-95 duration-100">
-            <h3 className="text-lg font-bold text-slate-900 mb-1">
-              {editingSubject ? `Edit Subject: ${editingSubject.code}` : `Add Subject to ${department.code}`}
-            </h3>
-            <p className="text-xs text-slate-500 mb-4">
-              Configure curriculum course code, required weekly hours, and semester association.
-            </p>
-
-            {modalError && (
-              <div className="mb-4 p-3 bg-rose-50 border border-rose-200 rounded-lg text-xs text-rose-700 font-medium">
-                {modalError}
+      <Modal
+        isOpen={subjectModalOpen}
+        onClose={() => setSubjectModalOpen(false)}
+        title={editingSubject ? 'Edit Subject' : 'Add Subject'}
+        badge={editingSubject ? editingSubject.code : `${department.code} • ${subjYearOfStudy}`}
+        icon={<BookOpen className="w-5 h-5 text-white" />}
+        maxWidth="lg"
+        footer={
+          <>
+            <span className="text-xs text-slate-400 font-medium">* Required</span>
+            <div className="flex items-center gap-2">
+              <button
+                type="button"
+                onClick={() => setSubjectModalOpen(false)}
+                className="px-4 py-2 text-xs font-semibold text-slate-600 hover:bg-slate-200/60 rounded-xl transition-colors cursor-pointer"
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                onClick={handleSaveSubject}
+                disabled={saving}
+                className="inline-flex items-center gap-1.5 px-5 py-2 text-xs font-bold text-white bg-[#3431B7] hover:bg-[#282694] disabled:opacity-50 disabled:cursor-not-allowed rounded-xl transition-colors shadow-xs cursor-pointer"
+              >
+                <Check className="w-3.5 h-3.5 stroke-[3]" />
+                <span>{saving ? 'Saving...' : editingSubject ? 'Save changes' : 'Create subject'}</span>
+              </button>
+            </div>
+          </>
+        }
+      >
+        <div className="space-y-4">
+          {/* Year & Semester Context Box */}
+          <div className="p-3.5 bg-indigo-50/70 rounded-2xl border border-indigo-100/90 text-xs space-y-2">
+            <div className="grid grid-cols-2 gap-2">
+              <div>
+                <span className="text-[10px] text-slate-400 font-bold uppercase block">Year Level</span>
+                <span className="font-bold text-slate-800">{subjYearOfStudy}</span>
               </div>
-            )}
-
-            <form onSubmit={handleSaveSubject} className="space-y-4">
-              {/* Year & Semester Context Box */}
-              <div className="p-3 bg-slate-50 rounded-xl border border-slate-200 text-xs space-y-2">
-                <div className="grid grid-cols-2 gap-2">
-                  <div>
-                    <span className="text-[10px] text-slate-400 font-bold uppercase block">Year Level</span>
-                    <span className="font-bold text-slate-800">{subjYearOfStudy}</span>
+              <div>
+                <span className="text-[10px] text-slate-400 font-bold uppercase block">Semester</span>
+                {editingSubject && !subjAllowChangeSemester ? (
+                  <div className="flex items-center justify-between">
+                    <span className="font-bold text-[#3431B7]">{subjSemester}</span>
+                    <button
+                      type="button"
+                      onClick={() => setSubjAllowChangeSemester(true)}
+                      className="text-[11px] text-[#3431B7] hover:underline font-bold cursor-pointer"
+                    >
+                      Change
+                    </button>
                   </div>
-                  <div>
-                    <span className="text-[10px] text-slate-400 font-bold uppercase block">Semester</span>
-                    {editingSubject && !subjAllowChangeSemester ? (
-                      <div className="flex items-center justify-between">
-                        <span className="font-bold text-[#3431B7]">{subjSemester}</span>
-                        <button
-                          type="button"
-                          onClick={() => setSubjAllowChangeSemester(true)}
-                          className="text-[11px] text-indigo-600 hover:underline font-semibold cursor-pointer"
-                        >
-                          Change
-                        </button>
-                      </div>
-                    ) : (
-                      <select
-                        value={subjSemester}
-                        onChange={(e) => setSubjSemester(e.target.value)}
-                        className="w-full px-2 py-1 text-xs border border-slate-300 rounded-lg bg-white font-bold text-[#3431B7] focus:outline-none focus:ring-1 focus:ring-[#3431B7]"
-                      >
-                        {getSemestersForYear(subjYearOfStudy).map(sem => (
-                          <option key={sem.name} value={sem.name}>
-                            {sem.name}
-                          </option>
-                        ))}
-                      </select>
-                    )}
-                  </div>
-                </div>
-
-                {editingSubject && subjAllowChangeSemester && (
-                  <p className="text-[11px] text-amber-700 pt-1 border-t border-amber-200/60 leading-tight">
-                    * Changing semester reassigns this course's curriculum scope. Active teaching assignments in other semesters will need to be re-evaluated.
-                  </p>
+                ) : (
+                  <select
+                    value={subjSemester}
+                    onChange={(e) => setSubjSemester(e.target.value)}
+                    className="w-full px-2.5 py-1 text-xs border border-slate-200 rounded-lg bg-white font-bold text-[#3431B7] focus:outline-none focus:ring-1 focus:ring-[#3431B7]"
+                  >
+                    {getSemestersForYear(subjYearOfStudy).map(sem => (
+                      <option key={sem.name} value={sem.name}>
+                        {sem.name}
+                      </option>
+                    ))}
+                  </select>
                 )}
               </div>
+            </div>
 
+            {editingSubject && subjAllowChangeSemester && (
+              <p className="text-[11px] text-amber-700 pt-1 border-t border-amber-200/60 leading-tight">
+                * Changing semester reassigns this course's curriculum scope. Active teaching assignments in other semesters will need to be re-evaluated.
+              </p>
+            )}
+          </div>
+
+          {modalError && (
+            <div className="p-3 bg-rose-50 border border-rose-200 rounded-xl text-xs text-rose-700 font-medium flex items-center gap-2">
+              <AlertTriangle className="w-4 h-4 shrink-0" />
+              <span>{modalError}</span>
+            </div>
+          )}
+
+          <form onSubmit={handleSaveSubject} className="space-y-4">
+            <div className="space-y-2">
+              <div className="text-[11px] font-bold text-slate-400 tracking-wider uppercase">
+                Course Details
+              </div>
               <div className="grid grid-cols-2 gap-3">
                 <div>
-                  <label className="block text-xs font-semibold uppercase tracking-wider text-slate-700 mb-1">
-                    Course Code
+                  <label className="block text-xs font-semibold text-slate-700 mb-1">
+                    Course code *
                   </label>
                   <input
                     type="text"
@@ -2736,17 +2821,17 @@ export default function DepartmentDetailPage() {
                     placeholder="e.g. CS201, MA101"
                     value={subjCode}
                     onChange={(e) => setSubjCode(e.target.value)}
-                    className="w-full px-3 py-2 text-sm border border-slate-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-[#3431B7] uppercase font-bold"
+                    className="w-full px-3 py-2 text-xs border border-slate-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-[#3431B7]/20 focus:border-[#3431B7] uppercase font-bold bg-white"
                   />
                 </div>
                 <div>
-                  <label className="block text-xs font-semibold uppercase tracking-wider text-slate-700 mb-1">
-                    Course Type
+                  <label className="block text-xs font-semibold text-slate-700 mb-1">
+                    Course type *
                   </label>
                   <select
                     value={subjType}
                     onChange={(e) => setSubjType(e.target.value as any)}
-                    className="w-full px-3 py-2 text-sm border border-slate-300 rounded-lg bg-white font-medium focus:outline-none focus:ring-2 focus:ring-[#3431B7]"
+                    className="w-full px-3 py-2 text-xs border border-slate-200 rounded-xl bg-white font-medium focus:outline-none focus:ring-2 focus:ring-[#3431B7]/20 focus:border-[#3431B7]"
                   >
                     <option value="Theory">Theory</option>
                     <option value="Lab">Laboratory</option>
@@ -2755,8 +2840,8 @@ export default function DepartmentDetailPage() {
               </div>
 
               <div>
-                <label className="block text-xs font-semibold uppercase tracking-wider text-slate-700 mb-1">
-                  Course Title
+                <label className="block text-xs font-semibold text-slate-700 mb-1">
+                  Course title *
                 </label>
                 <input
                   type="text"
@@ -2764,14 +2849,19 @@ export default function DepartmentDetailPage() {
                   placeholder="e.g. Data Structures & Algorithms"
                   value={subjName}
                   onChange={(e) => setSubjName(e.target.value)}
-                  className="w-full px-3 py-2 text-sm border border-slate-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-[#3431B7]"
+                  className="w-full px-3 py-2 text-xs border border-slate-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-[#3431B7]/20 focus:border-[#3431B7] bg-white"
                 />
               </div>
+            </div>
 
+            <div className="space-y-2">
+              <div className="text-[11px] font-bold text-slate-400 tracking-wider uppercase">
+                Schedule & Hours
+              </div>
               <div className="grid grid-cols-2 gap-3">
                 <div>
-                  <label className="block text-xs font-semibold uppercase tracking-wider text-slate-700 mb-1">
-                    Weekly Hours
+                  <label className="block text-xs font-semibold text-slate-700 mb-1">
+                    Weekly hours *
                   </label>
                   <input
                     type="number"
@@ -2779,13 +2869,13 @@ export default function DepartmentDetailPage() {
                     max="10"
                     value={subjHours}
                     onChange={(e) => setSubjHours(Number(e.target.value))}
-                    className="w-full px-3 py-2 text-sm border border-slate-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-[#3431B7]"
+                    className="w-full px-3 py-2 text-xs border border-slate-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-[#3431B7]/20 focus:border-[#3431B7] bg-white font-semibold"
                   />
                 </div>
                 {subjType === 'Lab' && (
                   <div>
-                    <label className="block text-xs font-semibold uppercase tracking-wider text-slate-700 mb-1">
-                      Lab Block (Hours)
+                    <label className="block text-xs font-semibold text-slate-700 mb-1">
+                      Lab block (hours) *
                     </label>
                     <input
                       type="number"
@@ -2793,103 +2883,95 @@ export default function DepartmentDetailPage() {
                       max="4"
                       value={subjLabBlock}
                       onChange={(e) => setSubjLabBlock(Number(e.target.value))}
-                      className="w-full px-3 py-2 text-sm border border-slate-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-[#3431B7]"
+                      className="w-full px-3 py-2 text-xs border border-slate-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-[#3431B7]/20 focus:border-[#3431B7] bg-white font-semibold"
                     />
                   </div>
                 )}
               </div>
-
-              <div className="flex justify-end gap-3 pt-3 border-t border-slate-100">
-                <button
-                  type="button"
-                  onClick={() => setSubjectModalOpen(false)}
-                  className="px-4 py-2 text-sm font-semibold text-slate-600 hover:bg-slate-100 rounded-lg transition-colors cursor-pointer"
-                >
-                  Cancel
-                </button>
-                <button
-                  type="submit"
-                  disabled={saving}
-                  className="px-4 py-2 text-sm font-semibold text-white bg-[#3431B7] hover:bg-[#28229E] disabled:opacity-50 disabled:cursor-not-allowed rounded-lg transition-colors cursor-pointer"
-                >
-                  {saving ? 'Saving...' : editingSubject ? 'Save Changes' : 'Create Subject'}
-                </button>
-              </div>
-            </form>
-          </div>
+            </div>
+          </form>
         </div>
-      )}
+      </Modal>
 
       {/* ========================================================= */}
       {/* MODAL 3: ADD CLASS SECTION (Phase 5: NO STRENGTH FIELD)   */}
       {/* ========================================================= */}
-      {sectionModalOpen && (
-        <div className="fixed inset-0 bg-slate-900/40 backdrop-blur-xs flex items-center justify-center p-4 z-50">
-          <div className="bg-white rounded-2xl max-w-md w-full p-6 shadow-xl border border-slate-100 animate-in fade-in zoom-in-95 duration-100">
-            <h3 className="text-lg font-bold text-slate-900 mb-1">
-              Add Class Section
-            </h3>
-            <p className="text-xs text-slate-500 mb-4">
-              Configure student class cohort section for {department.code}.
-            </p>
+      <Modal
+        isOpen={sectionModalOpen}
+        onClose={() => setSectionModalOpen(false)}
+        title="Add Class Section"
+        badge={department.code}
+        icon={<GraduationCap className="w-5 h-5 text-white" />}
+        maxWidth="md"
+        footer={
+          <>
+            <span className="text-xs text-slate-400 font-medium">* Required</span>
+            <div className="flex items-center gap-2">
+              <button
+                type="button"
+                onClick={() => setSectionModalOpen(false)}
+                className="px-4 py-2 text-xs font-semibold text-slate-600 hover:bg-slate-200/60 rounded-xl transition-colors cursor-pointer"
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                onClick={handleSaveSection}
+                disabled={saving}
+                className="inline-flex items-center gap-1.5 px-5 py-2 text-xs font-bold text-white bg-[#3431B7] hover:bg-[#282694] disabled:opacity-50 disabled:cursor-not-allowed rounded-xl transition-colors shadow-xs cursor-pointer"
+              >
+                <Check className="w-3.5 h-3.5 stroke-[3]" />
+                <span>{saving ? 'Creating...' : 'Create section'}</span>
+              </button>
+            </div>
+          </>
+        }
+      >
+        <div className="space-y-4">
+          <p className="text-xs text-slate-500">
+            Configure student class cohort section for {department.name} ({department.code}).
+          </p>
 
-            {modalError && (
-              <div className="mb-4 p-3 bg-rose-50 border border-rose-200 rounded-lg text-xs text-rose-700 font-medium">
-                {modalError}
-              </div>
-            )}
+          {modalError && (
+            <div className="p-3 bg-rose-50 border border-rose-200 rounded-xl text-xs text-rose-700 font-medium flex items-center gap-2">
+              <AlertTriangle className="w-4 h-4 shrink-0" />
+              <span>{modalError}</span>
+            </div>
+          )}
 
-            <form onSubmit={handleSaveSection} className="space-y-4">
-              <div className="grid grid-cols-2 gap-3">
-                <div>
-                  <label className="block text-xs font-semibold uppercase tracking-wider text-slate-700 mb-1">
-                    Academic Level
-                  </label>
-                  <select
-                    value={secYear}
-                    onChange={(e) => setSecYear(e.target.value as any)}
-                    className="w-full px-3 py-2 text-sm border border-slate-300 rounded-lg bg-white font-medium focus:outline-none focus:ring-2 focus:ring-[#3431B7]"
-                  >
-                    {UNDERGRADUATE_YEARS.map(y => (
-                      <option key={y} value={y}>{y}</option>
-                    ))}
-                  </select>
-                </div>
-                <div>
-                  <label className="block text-xs font-semibold uppercase tracking-wider text-slate-700 mb-1">
-                    Section Code
-                  </label>
-                  <input
-                    type="text"
-                    required
-                    placeholder="e.g. A, B, C"
-                    value={secName}
-                    onChange={(e) => setSecName(e.target.value)}
-                    className="w-full px-3 py-2 text-sm border border-slate-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-[#3431B7] uppercase font-bold"
-                  />
-                </div>
-              </div>
-
-              <div className="flex justify-end gap-3 pt-3 border-t border-slate-100">
-                <button
-                  type="button"
-                  onClick={() => setSectionModalOpen(false)}
-                  className="px-4 py-2 text-sm font-semibold text-slate-600 hover:bg-slate-100 rounded-lg transition-colors cursor-pointer"
+          <form onSubmit={handleSaveSection} className="space-y-4">
+            <div className="grid grid-cols-2 gap-3">
+              <div>
+                <label className="block text-xs font-semibold text-slate-700 mb-1">
+                  Academic level
+                </label>
+                <select
+                  value={secYear}
+                  onChange={(e) => setSecYear(e.target.value as any)}
+                  className="w-full px-3 py-2 text-xs border border-slate-200 rounded-xl bg-white font-medium focus:outline-none focus:ring-2 focus:ring-[#3431B7]/20 focus:border-[#3431B7]"
                 >
-                  Cancel
-                </button>
-                <button
-                  type="submit"
-                  disabled={saving}
-                  className="px-4 py-2 text-sm font-semibold text-white bg-[#3431B7] hover:bg-[#28229E] disabled:opacity-50 disabled:cursor-not-allowed rounded-lg transition-colors cursor-pointer"
-                >
-                  {saving ? 'Creating...' : 'Create Section'}
-                </button>
+                  {UNDERGRADUATE_YEARS.map(y => (
+                    <option key={y} value={y}>{y}</option>
+                  ))}
+                </select>
               </div>
-            </form>
-          </div>
+              <div>
+                <label className="block text-xs font-semibold text-slate-700 mb-1">
+                  Section code *
+                </label>
+                <input
+                  type="text"
+                  required
+                  placeholder="e.g. A, B, C"
+                  value={secName}
+                  onChange={(e) => setSecName(e.target.value)}
+                  className="w-full px-3 py-2 text-xs border border-slate-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-[#3431B7]/20 focus:border-[#3431B7] uppercase font-bold bg-white"
+                />
+              </div>
+            </div>
+          </form>
         </div>
-      )}
+      </Modal>
 
       {/* ========================================================= */}
       {/* MODAL 4: TEACHING ASSIGNMENT (SIMPLIFIED CLEAN POPUP)    */}
@@ -2924,30 +3006,47 @@ export default function DepartmentDetailPage() {
         const sortedCrossStaff = [...crossActiveStaff].sort((a, b) => a.displayName.localeCompare(b.displayName));
 
         return (
-          <div className="fixed inset-0 bg-slate-900/40 backdrop-blur-xs flex items-center justify-center p-4 z-50">
-            <div className="bg-white rounded-2xl max-w-lg w-full p-6 shadow-xl border border-slate-100 animate-in fade-in zoom-in-95 duration-100 max-h-[90vh] overflow-y-auto">
-              {/* Modal Header */}
-              <div className="flex items-center justify-between pb-3 border-b border-slate-100 mb-4">
-                <div>
-                  <h3 className="text-lg font-bold text-slate-900">
-                    Map Faculty to Subject
-                  </h3>
-                  <p className="text-xs text-slate-500">
-                    Assign a faculty member to teach a curriculum subject for this section.
-                  </p>
+          <Modal
+            isOpen={assignModalOpen}
+            onClose={() => setAssignModalOpen(false)}
+            title="Map Faculty to Subject"
+            badge={modalSelectedClass ? `${modalSelectedClass.yearOfStudy} Sec ${modalSelectedClass.section}` : department.code}
+            icon={<Briefcase className="w-5 h-5 text-white" />}
+            maxWidth="xl"
+            footer={
+              <>
+                <span className="text-xs text-slate-400 font-medium">
+                  {modalSelectedSubj?.weeklyHours ? `${modalSelectedSubj.weeklyHours} hrs/wk required` : '* All fields required'}
+                </span>
+                <div className="flex items-center gap-2">
+                  <button
+                    type="button"
+                    onClick={() => setAssignModalOpen(false)}
+                    className="px-4 py-2 text-xs font-semibold text-slate-600 hover:bg-slate-200/60 rounded-xl transition-colors cursor-pointer"
+                  >
+                    Cancel
+                  </button>
+                  <button
+                    type="button"
+                    onClick={handleSaveAssignment}
+                    disabled={!isReadyToSave || saving}
+                    className="inline-flex items-center gap-1.5 px-5 py-2 text-xs font-bold text-white bg-[#3431B7] hover:bg-[#282694] disabled:opacity-50 disabled:cursor-not-allowed rounded-xl transition-colors shadow-xs cursor-pointer"
+                  >
+                    <Check className="w-3.5 h-3.5 stroke-[3]" />
+                    <span>{saving ? 'Saving...' : 'Save assignment'}</span>
+                  </button>
                 </div>
-                <button
-                  type="button"
-                  onClick={() => setAssignModalOpen(false)}
-                  className="text-slate-400 hover:text-slate-600 p-1.5 rounded-lg hover:bg-slate-100 transition-colors cursor-pointer"
-                >
-                  <X className="w-5 h-5" />
-                </button>
-              </div>
+              </>
+            }
+          >
+            <div className="space-y-4">
+              <p className="text-xs text-slate-500">
+                Assign a faculty member to teach a curriculum subject for this class section.
+              </p>
 
               {/* Error Alert */}
               {modalError && (
-                <div className="mb-4 p-3 bg-rose-50 border border-rose-200 rounded-xl text-xs text-rose-700 font-medium flex items-center gap-2">
+                <div className="p-3 bg-rose-50 border border-rose-200 rounded-xl text-xs text-rose-700 font-medium flex items-center gap-2">
                   <AlertTriangle className="w-4 h-4 shrink-0 text-rose-600" />
                   <span>{modalError}</span>
                 </div>
@@ -2956,28 +3055,28 @@ export default function DepartmentDetailPage() {
               <form onSubmit={handleSaveAssignment} className="space-y-4">
                 {/* SECTION 1: ASSIGNMENT CONTEXT */}
                 <div className="space-y-2">
-                  <label className="block text-xs font-semibold uppercase tracking-wider text-slate-700">
+                  <div className="text-[11px] font-bold text-slate-400 tracking-wider uppercase">
                     Assignment Context
-                  </label>
+                  </div>
                   <div className="grid grid-cols-2 gap-2 text-xs">
-                    <div className="px-3 py-2 bg-slate-50 border border-slate-200 rounded-lg">
+                    <div className="px-3.5 py-2.5 bg-slate-50 border border-slate-200 rounded-xl">
                       <span className="text-[10px] text-slate-400 font-semibold uppercase block">Department</span>
                       <span className="font-bold text-slate-800 truncate block">{department.name}</span>
                     </div>
-                    <div className="px-3 py-2 bg-slate-50 border border-slate-200 rounded-lg">
+                    <div className="px-3.5 py-2.5 bg-slate-50 border border-slate-200 rounded-xl">
                       <span className="text-[10px] text-slate-400 font-semibold uppercase block">Academic Year</span>
                       <span className="font-bold text-slate-800 block">{modalSelectedClass?.academicYear || '2025–2026'}</span>
                     </div>
                   </div>
                   <div className="grid grid-cols-2 gap-2">
                     <div>
-                      <label className="block text-[11px] font-semibold text-slate-600 mb-1">
+                      <label className="block text-xs font-semibold text-slate-700 mb-1">
                         Section
                       </label>
                       <select
                         value={assignClassId}
                         onChange={(e) => handleAssignClassChange(e.target.value)}
-                        className="w-full px-3 py-2 text-sm border border-slate-300 rounded-lg bg-white font-medium focus:outline-none focus:ring-2 focus:ring-[#3431B7]"
+                        className="w-full px-3 py-2 text-xs border border-slate-200 rounded-xl bg-white font-medium focus:outline-none focus:ring-2 focus:ring-[#3431B7]/20 focus:border-[#3431B7]"
                       >
                         {classes.map(c => (
                           <option key={c.classId} value={c.classId}>
@@ -2987,13 +3086,13 @@ export default function DepartmentDetailPage() {
                       </select>
                     </div>
                     <div>
-                      <label className="block text-[11px] font-semibold text-slate-600 mb-1">
+                      <label className="block text-xs font-semibold text-slate-700 mb-1">
                         Semester
                       </label>
                       <select
                         value={assignSemester}
                         onChange={(e) => handleAssignSemesterChange(e.target.value)}
-                        className="w-full px-3 py-2 text-sm border border-slate-300 rounded-lg bg-white font-bold text-[#3431B7] focus:outline-none focus:ring-2 focus:ring-[#3431B7]"
+                        className="w-full px-3 py-2 text-xs border border-slate-200 rounded-xl bg-white font-bold text-[#3431B7] focus:outline-none focus:ring-2 focus:ring-[#3431B7]/20 focus:border-[#3431B7]"
                       >
                         {getSemestersForYear(modalSelectedClass?.yearOfStudy).map(s => (
                           <option key={s.name} value={s.name}>
@@ -3007,13 +3106,13 @@ export default function DepartmentDetailPage() {
 
                 {/* SECTION 2: SUBJECT COURSE */}
                 <div className="space-y-2">
-                  <label className="block text-xs font-semibold uppercase tracking-wider text-slate-700">
+                  <div className="text-[11px] font-bold text-slate-400 tracking-wider uppercase">
                     Subject Course
-                  </label>
+                  </div>
                   <select
                     value={assignSubjId}
                     onChange={(e) => handleAssignSubjectChange(e.target.value)}
-                    className="w-full px-3 py-2 text-sm border border-slate-300 rounded-lg bg-white font-medium focus:outline-none focus:ring-2 focus:ring-[#3431B7]"
+                    className="w-full px-3 py-2 text-xs border border-slate-200 rounded-xl bg-white font-medium focus:outline-none focus:ring-2 focus:ring-[#3431B7]/20 focus:border-[#3431B7]"
                   >
                     <optgroup label={`Cohort Subjects (${modalSelectedClass?.yearOfStudy || 'Curriculum'} — ${assignSemester})`}>
                       {modalCohortSubjects.map(s => (
@@ -3033,9 +3132,9 @@ export default function DepartmentDetailPage() {
                     )}
                   </select>
 
-                  {/* Selected Subject Display: Only Subject Name, Subject Type, Weekly Hours */}
+                  {/* Selected Subject Display */}
                   {modalSelectedSubj && (
-                    <div className="p-3 bg-slate-50 border border-slate-200 rounded-xl flex items-center justify-between text-xs">
+                    <div className="p-3 bg-slate-50 border border-slate-200 rounded-2xl flex items-center justify-between text-xs">
                       <div>
                         <span className="text-[10px] text-slate-400 font-semibold uppercase block">Subject Name</span>
                         <span className="font-bold text-slate-900 text-sm">{modalSelectedSubj.name}</span>
@@ -3063,9 +3162,9 @@ export default function DepartmentDetailPage() {
                 {/* SECTION 3: FACULTY */}
                 <div className="space-y-2">
                   <div className="flex items-center justify-between">
-                    <label className="block text-xs font-semibold uppercase tracking-wider text-slate-700">
+                    <div className="text-[11px] font-bold text-slate-400 tracking-wider uppercase">
                       Faculty Member
-                    </label>
+                    </div>
                     <button
                       type="button"
                       onClick={handleToggleCrossDept}
@@ -3078,7 +3177,7 @@ export default function DepartmentDetailPage() {
                   <select
                     value={assignMemberId}
                     onChange={(e) => handleAssignFacultyChange(e.target.value)}
-                    className="w-full px-3 py-2 text-sm border border-slate-300 rounded-lg bg-white font-medium focus:outline-none focus:ring-2 focus:ring-[#3431B7]"
+                    className="w-full px-3 py-2 text-xs border border-slate-200 rounded-xl bg-white font-medium focus:outline-none focus:ring-2 focus:ring-[#3431B7]/20 focus:border-[#3431B7]"
                   >
                     <option value="" disabled>-- Select Faculty Member --</option>
                     <optgroup label={`${department.name} Faculty`}>
@@ -3100,9 +3199,9 @@ export default function DepartmentDetailPage() {
                     )}
                   </select>
 
-                  {/* Selected Faculty Display: Only Faculty Name, Member ID, Designation */}
+                  {/* Selected Faculty Display */}
                   {modalSelectedFaculty && (
-                    <div className="p-3 bg-slate-50 border border-slate-200 rounded-xl flex items-center justify-between text-xs">
+                    <div className="p-3 bg-slate-50 border border-slate-200 rounded-2xl flex items-center justify-between text-xs">
                       <div>
                         <span className="text-[10px] text-slate-400 font-semibold uppercase block">Faculty Name</span>
                         <span className="font-bold text-slate-900 text-sm">{modalSelectedFaculty.displayName}</span>
@@ -3122,56 +3221,66 @@ export default function DepartmentDetailPage() {
                     </div>
                   )}
                 </div>
-
-                {/* SECTION 4: ACTIONS */}
-                <div className="flex items-center justify-end gap-3 pt-3 border-t border-slate-100">
-                  <button
-                    type="button"
-                    onClick={() => setAssignModalOpen(false)}
-                    className="px-4 py-2 text-sm font-semibold text-slate-600 hover:bg-slate-100 rounded-xl transition-colors cursor-pointer"
-                  >
-                    Cancel
-                  </button>
-                  <button
-                    type="submit"
-                    disabled={!isReadyToSave || saving}
-                    className="px-5 py-2 text-sm font-semibold text-white bg-[#3431B7] hover:bg-[#28229E] disabled:opacity-50 disabled:cursor-not-allowed rounded-xl transition-colors cursor-pointer shadow-xs"
-                  >
-                    {saving ? 'Saving...' : 'Save Assignment'}
-                  </button>
-                </div>
               </form>
             </div>
-          </div>
+          </Modal>
         );
       })()}
 
       {/* ========================================================= */}
       {/* MODAL 5: REASSIGN FACULTY MEMBER                          */}
       {/* ========================================================= */}
-      {reassignModalOpen && reassignTargetAsgn && (
-        <div className="fixed inset-0 bg-slate-900/40 backdrop-blur-xs flex items-center justify-center p-4 z-50">
-          <div className="bg-white rounded-2xl max-w-lg w-full p-6 shadow-xl border border-slate-100 animate-in fade-in zoom-in-95 duration-100">
-            <div className="flex items-center gap-2 mb-1">
-              <div className="w-8 h-8 rounded-lg bg-amber-50 text-amber-600 flex items-center justify-center">
-                <ArrowRightLeft className="w-4 h-4" />
+      {reassignTargetAsgn && (
+        <Modal
+          isOpen={reassignModalOpen}
+          onClose={() => {
+            setReassignModalOpen(false);
+            setReassignTargetAsgn(null);
+          }}
+          title="Reassign Faculty Member"
+          badge="Curriculum Reassignment"
+          icon={<ArrowRightLeft className="w-5 h-5 text-white" />}
+          maxWidth="lg"
+          footer={
+            <>
+              <span className="text-xs text-slate-400 font-medium">In-place slot update</span>
+              <div className="flex items-center gap-2">
+                <button
+                  type="button"
+                  onClick={() => {
+                    setReassignModalOpen(false);
+                    setReassignTargetAsgn(null);
+                  }}
+                  className="px-4 py-2 text-xs font-semibold text-slate-600 hover:bg-slate-200/60 rounded-xl transition-colors cursor-pointer"
+                >
+                  Cancel
+                </button>
+                <button
+                  type="button"
+                  onClick={handleConfirmReassign}
+                  disabled={saving || !reassignNewMemberId || reassignNewMemberId === reassignTargetAsgn.memberId}
+                  className="inline-flex items-center gap-1.5 px-5 py-2 text-xs font-bold text-white bg-amber-600 hover:bg-amber-700 disabled:opacity-50 disabled:cursor-not-allowed rounded-xl transition-colors shadow-xs cursor-pointer"
+                >
+                  <ArrowRightLeft className="w-3.5 h-3.5" />
+                  <span>{saving ? 'Reassigning...' : 'Confirm Reassignment'}</span>
+                </button>
               </div>
-              <h3 className="text-lg font-bold text-slate-900">
-                Reassign Faculty Member
-              </h3>
-            </div>
-            <p className="text-xs text-slate-500 mb-4">
+            </>
+          }
+        >
+          <div className="space-y-4">
+            <p className="text-xs text-slate-500">
               Replace the faculty member assigned to this curriculum slot without affecting subject or class identity.
             </p>
 
             {modalError && (
-              <div className="mb-4 p-3 bg-rose-50 border border-rose-200 rounded-lg text-xs text-rose-700 font-medium">
+              <div className="p-3 bg-rose-50 border border-rose-200 rounded-xl text-xs text-rose-700 font-medium">
                 {modalError}
               </div>
             )}
 
             <form onSubmit={handleConfirmReassign} className="space-y-4">
-              <div className="p-3 rounded-xl bg-slate-50 border border-slate-200 text-xs space-y-1.5">
+              <div className="p-3.5 rounded-2xl bg-slate-50 border border-slate-200 text-xs space-y-2">
                 <div className="flex justify-between">
                   <span className="text-slate-500">Class Section:</span>
                   <span className="font-bold text-slate-800">
@@ -3212,7 +3321,7 @@ export default function DepartmentDetailPage() {
                 <select
                   value={reassignNewMemberId}
                   onChange={(e) => setReassignNewMemberId(e.target.value)}
-                  className="w-full px-3 py-2 text-sm border border-slate-300 rounded-lg bg-white font-medium focus:outline-none focus:ring-2 focus:ring-[#3431B7]"
+                  className="w-full px-3 py-2 text-xs border border-slate-200 rounded-xl bg-white font-medium focus:outline-none focus:ring-2 focus:ring-[#3431B7]/20 focus:border-[#3431B7]"
                 >
                   <optgroup label="Department Faculty">
                     {deptStaff.filter(st => st.memberId !== reassignTargetAsgn.memberId).map(st => (
@@ -3241,81 +3350,95 @@ export default function DepartmentDetailPage() {
                   Reassignment updates the active teaching slot in-place. Previously published timetables remain immutable in history.
                 </span>
               </div>
-
-              <div className="flex justify-end gap-3 pt-3 border-t border-slate-100">
-                <button
-                  type="button"
-                  onClick={() => {
-                    setReassignModalOpen(false);
-                    setReassignTargetAsgn(null);
-                  }}
-                  className="px-4 py-2 text-sm font-semibold text-slate-600 hover:bg-slate-100 rounded-lg transition-colors cursor-pointer"
-                >
-                  Cancel
-                </button>
-                <button
-                  type="submit"
-                  disabled={saving || !reassignNewMemberId || reassignNewMemberId === reassignTargetAsgn.memberId}
-                  className="inline-flex items-center gap-1.5 px-4 py-2 text-sm font-semibold text-white bg-amber-600 hover:bg-amber-700 disabled:opacity-50 disabled:cursor-not-allowed rounded-lg transition-colors shadow-xs cursor-pointer"
-                >
-                  <ArrowRightLeft className="w-4 h-4" />
-                  <span>{saving ? 'Reassigning...' : 'Confirm Reassignment'}</span>
-                </button>
-              </div>
             </form>
           </div>
-        </div>
+        </Modal>
       )}
 
       {/* ========================================================= */}
       {/* MODAL 6: STAFF PROFILE POPUP (Phase 3 & Workstream A2)    */}
       {/* ========================================================= */}
       {selectedProfileStaff && (
-        <div className="fixed inset-0 bg-slate-900/40 backdrop-blur-xs flex items-center justify-center p-4 z-50 animate-in fade-in duration-100">
-          <div className="bg-white rounded-2xl max-w-lg w-full p-6 shadow-xl border border-slate-100 max-h-[90vh] overflow-y-auto">
-            {/* Header / Avatar / Identity */}
-            <div className="flex items-start justify-between mb-5">
-              <div className="flex items-center gap-4">
-                <div className="w-16 h-16 rounded-2xl bg-gradient-to-br from-[#29229D] via-[#322BB7] to-[#3F35C8] text-white flex items-center justify-center font-black text-2xl shadow-inner shrink-0">
-                  {selectedProfileStaff.initials || selectedProfileStaff.staffName?.charAt(0)?.toUpperCase() || 'F'}
-                </div>
-                <div>
-                  <div className="flex items-center gap-2">
-                    <h3 className="text-xl font-extrabold text-slate-900 leading-tight">
-                      {selectedProfileStaff.displayName}
-                    </h3>
-                    <span
-                      className={`inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-[11px] font-bold ${
-                        selectedProfileStaff.status === 'ACTIVE'
-                          ? 'bg-emerald-50 text-emerald-700 border border-emerald-200'
-                          : 'bg-slate-100 text-slate-500 border border-slate-200'
-                      }`}
-                    >
-                      {selectedProfileStaff.status === 'ACTIVE' ? <CheckCircle2 className="w-3 h-3" /> : <XCircle className="w-3 h-3" />}
-                      {selectedProfileStaff.status}
-                    </span>
-                  </div>
-                  <div className="flex items-center gap-2 mt-1.5">
-                    <span className="font-mono text-xs font-bold text-[#3431B7] bg-[#EEF0FA] px-2.5 py-0.5 rounded-md">
-                      {selectedProfileStaff.memberId}
-                    </span>
-                    <span className="text-xs text-slate-500 font-medium">
-                      {selectedProfileStaff.designation || 'Assistant Professor'}
-                    </span>
-                  </div>
-                </div>
-              </div>
-
+        <Modal
+          isOpen={!!selectedProfileStaff}
+          onClose={() => setSelectedProfileStaff(null)}
+          title={selectedProfileStaff.displayName}
+          badge={selectedProfileStaff.memberId}
+          icon={
+            <span className="font-black text-sm">
+              {selectedProfileStaff.initials || selectedProfileStaff.staffName?.charAt(0)?.toUpperCase() || 'F'}
+            </span>
+          }
+          maxWidth="lg"
+          footer={
+            <div className="flex flex-wrap items-center justify-between gap-2 w-full">
               <button
-                onClick={() => setSelectedProfileStaff(null)}
-                className="p-1.5 rounded-lg text-slate-400 hover:text-slate-700 hover:bg-slate-100 transition-colors cursor-pointer"
+                type="button"
+                onClick={() => handleDeleteStaff(selectedProfileStaff)}
+                disabled={saving}
+                className="inline-flex items-center gap-1.5 px-3.5 py-2 text-xs font-bold text-rose-700 bg-rose-50 hover:bg-rose-100 border border-rose-200 rounded-xl transition-colors cursor-pointer"
               >
-                <X className="w-5 h-5" />
+                <Trash2 className="w-3.5 h-3.5" />
+                <span>Delete</span>
               </button>
+
+              <div className="flex items-center gap-2">
+                <button
+                  type="button"
+                  onClick={() => {
+                    const m = selectedProfileStaff;
+                    setSelectedProfileStaff(null);
+                    handleToggleStaffStatus(m);
+                  }}
+                  disabled={saving}
+                  className="inline-flex items-center gap-1.5 px-3.5 py-2 text-xs font-bold text-slate-700 bg-slate-100 hover:bg-slate-200 rounded-xl transition-colors cursor-pointer"
+                >
+                  <Archive className="w-3.5 h-3.5" />
+                  <span>{selectedProfileStaff.status === 'ACTIVE' ? 'Deactivate' : 'Reactivate'}</span>
+                </button>
+
+                <button
+                  type="button"
+                  onClick={() => {
+                    const m = selectedProfileStaff;
+                    setSelectedProfileStaff(null);
+                    openEditStaffModal(m);
+                  }}
+                  disabled={saving}
+                  className="inline-flex items-center gap-1.5 px-4 py-2 text-xs font-bold text-white bg-[#3431B7] hover:bg-[#282694] rounded-xl transition-colors shadow-xs cursor-pointer"
+                >
+                  <Edit2 className="w-3.5 h-3.5" />
+                  <span>Edit profile</span>
+                </button>
+              </div>
+            </div>
+          }
+        >
+          <div className="space-y-4">
+            {/* Status and designation banner */}
+            <div className="flex items-center justify-between p-3 rounded-2xl bg-slate-50 border border-slate-100">
+              <div className="flex items-center gap-2">
+                <span className="font-mono text-xs font-bold text-[#3431B7] bg-[#EEF0FA] px-2.5 py-0.5 rounded-md">
+                  {selectedProfileStaff.memberId}
+                </span>
+                <span className="text-xs text-slate-500 font-medium">
+                  {selectedProfileStaff.designation || 'Assistant Professor'}
+                </span>
+              </div>
+              <span
+                className={`inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-[11px] font-bold ${
+                  selectedProfileStaff.status === 'ACTIVE'
+                    ? 'bg-emerald-50 text-emerald-700 border border-emerald-200'
+                    : 'bg-slate-100 text-slate-500 border border-slate-200'
+                }`}
+              >
+                {selectedProfileStaff.status === 'ACTIVE' ? <CheckCircle2 className="w-3 h-3" /> : <XCircle className="w-3 h-3" />}
+                {selectedProfileStaff.status}
+              </span>
             </div>
 
             {/* Profile Information Cards */}
-            <div className="space-y-3 py-2 border-y border-slate-100 my-4 text-xs">
+            <div className="space-y-3 text-xs">
               {/* Contact Information */}
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
                 <div className="p-3 rounded-xl bg-slate-50 border border-slate-100">
@@ -3384,48 +3507,8 @@ export default function DepartmentDetailPage() {
                 })()}
               </div>
             </div>
-
-            {/* Action Buttons */}
-            <div className="flex flex-wrap items-center justify-between gap-2 pt-2">
-              <button
-                onClick={() => handleDeleteStaff(selectedProfileStaff)}
-                disabled={saving}
-                className="inline-flex items-center gap-1.5 px-3 py-2 text-xs font-bold text-rose-700 bg-rose-50 hover:bg-rose-100 border border-rose-200 rounded-xl transition-colors cursor-pointer"
-              >
-                <Trash2 className="w-3.5 h-3.5" />
-                <span>Delete Faculty</span>
-              </button>
-
-              <div className="flex items-center gap-2">
-                <button
-                  onClick={() => {
-                    const m = selectedProfileStaff;
-                    setSelectedProfileStaff(null);
-                    handleToggleStaffStatus(m);
-                  }}
-                  disabled={saving}
-                  className="inline-flex items-center gap-1.5 px-3.5 py-2 text-xs font-bold text-slate-700 bg-slate-100 hover:bg-slate-200 rounded-xl transition-colors cursor-pointer"
-                >
-                  <Archive className="w-3.5 h-3.5" />
-                  <span>{selectedProfileStaff.status === 'ACTIVE' ? 'Deactivate' : 'Reactivate'}</span>
-                </button>
-
-                <button
-                  onClick={() => {
-                    const m = selectedProfileStaff;
-                    setSelectedProfileStaff(null);
-                    openEditStaffModal(m);
-                  }}
-                  disabled={saving}
-                  className="inline-flex items-center gap-1.5 px-4 py-2 text-xs font-bold text-white bg-[#3431B7] hover:bg-[#28229E] rounded-xl transition-colors shadow-xs cursor-pointer"
-                >
-                  <Edit2 className="w-3.5 h-3.5" />
-                  <span>Edit Profile</span>
-                </button>
-              </div>
-            </div>
           </div>
-        </div>
+        </Modal>
       )}
     </div>
   );

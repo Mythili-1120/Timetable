@@ -5,7 +5,8 @@ import { getAllClasses, createClass, updateClass } from '../../../lib/services/c
 import { getAllDepartments } from '../../../lib/services/departmentService';
 import { ClassSection, Department } from '../../../types';
 import { useAuth } from '../../../lib/context/AuthContext';
-import { GraduationCap, Plus, Edit2, Archive, CheckCircle2, XCircle } from 'lucide-react';
+import { GraduationCap, Plus, Edit2, Archive, CheckCircle2, XCircle, Check, AlertTriangle } from 'lucide-react';
+import Modal from '../../../components/Modal';
 
 export default function ClassesPage() {
   const [classes, setClasses] = useState<ClassSection[]>([]);
@@ -189,105 +190,120 @@ export default function ClassesPage() {
       </div>
 
       {/* Modal Dialog */}
-      {modalOpen && (
-        <div className="fixed inset-0 bg-slate-900/40 backdrop-blur-xs flex items-center justify-center p-4 z-50">
-          <div className="bg-white rounded-2xl max-w-md w-full p-6 shadow-xl border border-slate-100 animate-in fade-in zoom-in-95 duration-100">
-            <h3 className="text-lg font-bold text-slate-900 mb-4">Add Class Section</h3>
+      <Modal
+        isOpen={modalOpen}
+        onClose={() => setModalOpen(false)}
+        title={editingClass ? 'Edit Class Section' : 'Add Class Section'}
+        badge="Class Section"
+        icon={<GraduationCap className="w-5 h-5 text-white" />}
+        maxWidth="md"
+        footer={
+          <>
+            <span className="text-xs text-slate-400 font-medium">* Required</span>
+            <div className="flex items-center gap-2">
+              <button
+                type="button"
+                onClick={() => setModalOpen(false)}
+                className="px-4 py-2 text-xs font-semibold text-slate-600 hover:bg-slate-200/60 rounded-xl transition-colors cursor-pointer"
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                onClick={handleSave}
+                disabled={saving || departments.length === 0}
+                className="inline-flex items-center gap-1.5 px-5 py-2 text-xs font-bold text-white bg-[#3431B7] hover:bg-[#282694] disabled:opacity-50 disabled:cursor-not-allowed rounded-xl transition-colors shadow-xs cursor-pointer"
+              >
+                <Check className="w-3.5 h-3.5 stroke-[3]" />
+                <span>{saving ? 'Creating...' : 'Create Class Section'}</span>
+              </button>
+            </div>
+          </>
+        }
+      >
+        <div className="space-y-4">
+          <p className="text-xs text-slate-500">
+            Configure student class section cohort and academic year assignment.
+          </p>
 
-            {error && (
-              <div className="mb-4 p-3 bg-rose-50 border border-rose-200 rounded-lg text-xs text-rose-700 font-medium">
-                {error}
-              </div>
-            )}
+          {error && (
+            <div className="p-3 bg-rose-50 border border-rose-200 rounded-xl text-xs text-rose-700 font-medium flex items-center gap-2">
+              <AlertTriangle className="w-4 h-4 shrink-0" />
+              <span>{error}</span>
+            </div>
+          )}
 
-            {departments.length === 0 && (
-              <div className="mb-4 p-3 bg-amber-50 border border-amber-200 rounded-lg text-xs text-amber-800 font-medium">
-                No active departments found. Please create a Department in Department Master before configuring classes.
-              </div>
-            )}
+          {departments.length === 0 && (
+            <div className="p-3 bg-amber-50 border border-amber-200 rounded-xl text-xs text-amber-800 font-medium flex items-center gap-2">
+              <AlertTriangle className="w-4 h-4 shrink-0 text-amber-600" />
+              <span>No active departments found. Please create a Department in Department Master before configuring classes.</span>
+            </div>
+          )}
 
-            <form onSubmit={handleSave} className="space-y-4">
+          <form onSubmit={handleSave} className="space-y-4">
+            <div>
+              <label className="block text-xs font-semibold text-slate-700 mb-1">
+                Department *
+              </label>
+              <select
+                value={departmentId}
+                onChange={(e) => setDepartmentId(e.target.value)}
+                className="w-full px-3 py-2 text-xs border border-slate-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-[#3431B7]/20 focus:border-[#3431B7] bg-white font-medium"
+              >
+                {departments.map(d => (
+                  <option key={d.departmentId} value={d.departmentId}>
+                    {d.code} — {d.name}
+                  </option>
+                ))}
+              </select>
+            </div>
+
+            <div className="grid grid-cols-2 gap-3">
               <div>
-                <label className="block text-xs font-semibold uppercase tracking-wider text-slate-700 mb-1">
-                  Department
+                <label className="block text-xs font-semibold text-slate-700 mb-1">
+                  Year of Study *
                 </label>
                 <select
-                  value={departmentId}
-                  onChange={(e) => setDepartmentId(e.target.value)}
-                  className="w-full px-3 py-2 text-sm border border-slate-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-brand-500 bg-white"
+                  value={yearOfStudy}
+                  onChange={(e) => setYearOfStudy(e.target.value as any)}
+                  className="w-full px-3 py-2 text-xs border border-slate-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-[#3431B7]/20 focus:border-[#3431B7] bg-white font-medium"
                 >
-                  {departments.map(d => (
-                    <option key={d.departmentId} value={d.departmentId}>
-                      {d.code} — {d.name}
-                    </option>
-                  ))}
+                  <option value="1st Year">1st Year</option>
+                  <option value="2nd Year">2nd Year</option>
+                  <option value="3rd Year">3rd Year</option>
+                  <option value="4th Year">4th Year</option>
                 </select>
               </div>
-
-              <div className="grid grid-cols-2 gap-3">
-                <div>
-                  <label className="block text-xs font-semibold uppercase tracking-wider text-slate-700 mb-1">
-                    Year of Study
-                  </label>
-                  <select
-                    value={yearOfStudy}
-                    onChange={(e) => setYearOfStudy(e.target.value as any)}
-                    className="w-full px-3 py-2 text-sm border border-slate-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-brand-500 bg-white"
-                  >
-                    <option value="1st Year">1st Year</option>
-                    <option value="2nd Year">2nd Year</option>
-                    <option value="3rd Year">3rd Year</option>
-                    <option value="4th Year">4th Year</option>
-                  </select>
-                </div>
-                <div>
-                  <label className="block text-xs font-semibold uppercase tracking-wider text-slate-700 mb-1">
-                    Section
-                  </label>
-                  <input
-                    type="text"
-                    required
-                    placeholder="e.g. A, B, C"
-                    value={section}
-                    onChange={(e) => setSection(e.target.value)}
-                    className="w-full px-3 py-2 text-sm border border-slate-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-brand-500 uppercase font-bold"
-                  />
-                </div>
-              </div>
-
               <div>
-                <label className="block text-xs font-semibold uppercase tracking-wider text-slate-700 mb-1">
-                  Academic Year
+                <label className="block text-xs font-semibold text-slate-700 mb-1">
+                  Section *
                 </label>
                 <input
                   type="text"
                   required
-                  value={academicYear}
-                  onChange={(e) => setAcademicYear(e.target.value)}
-                  className="w-full px-3 py-2 text-sm border border-slate-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-brand-500 font-mono"
+                  placeholder="e.g. A, B, C"
+                  value={section}
+                  onChange={(e) => setSection(e.target.value)}
+                  className="w-full px-3 py-2 text-xs border border-slate-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-[#3431B7]/20 focus:border-[#3431B7] uppercase font-bold bg-white"
                 />
               </div>
+            </div>
 
-              <div className="flex justify-end gap-3 pt-3 border-t border-slate-100">
-                <button
-                  type="button"
-                  onClick={() => setModalOpen(false)}
-                  className="px-4 py-2 text-sm font-semibold text-slate-600 hover:bg-slate-100 rounded-lg transition-colors"
-                >
-                  Cancel
-                </button>
-                <button
-                  type="submit"
-                  disabled={saving || departments.length === 0}
-                  className="px-4 py-2 text-sm font-semibold text-white bg-brand-600 hover:bg-brand-700 disabled:opacity-50 disabled:cursor-not-allowed rounded-lg transition-colors cursor-pointer"
-                >
-                  {saving ? 'Creating...' : 'Create Class Section'}
-                </button>
-              </div>
-            </form>
-          </div>
+            <div>
+              <label className="block text-xs font-semibold text-slate-700 mb-1">
+                Academic Year *
+              </label>
+              <input
+                type="text"
+                required
+                value={academicYear}
+                onChange={(e) => setAcademicYear(e.target.value)}
+                className="w-full px-3 py-2 text-xs border border-slate-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-[#3431B7]/20 focus:border-[#3431B7] font-mono bg-white"
+              />
+            </div>
+          </form>
         </div>
-      )}
+      </Modal>
     </div>
   );
 }

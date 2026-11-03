@@ -16,7 +16,8 @@ import { getAllSubjects } from '../../../lib/services/subjectService';
 import { getAllClasses } from '../../../lib/services/classService';
 import { TeachingAssignment, Department, Staff, Subject, ClassSection, SubjectResolutionResult } from '../../../types';
 import { useAuth } from '../../../lib/context/AuthContext';
-import { Briefcase, Plus, Trash2, Filter, Sparkles, CheckCircle2, AlertCircle, AlertTriangle, Layers, ArrowRightLeft, ShieldCheck } from 'lucide-react';
+import { Briefcase, Plus, Trash2, Filter, Sparkles, CheckCircle2, AlertCircle, AlertTriangle, Layers, ArrowRightLeft, ShieldCheck, Check } from 'lucide-react';
+import Modal from '../../../components/Modal';
 
 export default function AssignmentsPage() {
   const [assignments, setAssignments] = useState<TeachingAssignment[]>([]);
@@ -388,292 +389,325 @@ export default function AssignmentsPage() {
       </div>
 
       {/* Automatic Assignment Modal Dialog */}
-      {modalOpen && (
-        <div className="fixed inset-0 bg-slate-900/40 backdrop-blur-xs flex items-center justify-center p-4 z-50">
-          <div className="bg-white rounded-2xl max-w-lg w-full p-6 shadow-xl border border-slate-100">
-            <div className="flex items-center gap-2 mb-1">
-              <div className="w-8 h-8 rounded-lg bg-brand-50 text-brand-600 flex items-center justify-center">
-                <Sparkles className="w-4 h-4" />
-              </div>
-              <h3 className="text-lg font-bold text-slate-900">Automatic Teaching Assignment</h3>
+      <Modal
+        isOpen={modalOpen}
+        onClose={() => setModalOpen(false)}
+        title="Automatic Teaching Assignment"
+        badge="Curriculum Mapping"
+        icon={<Sparkles className="w-5 h-5 text-white" />}
+        maxWidth="lg"
+        footer={
+          <>
+            <span className="text-xs text-slate-400 font-medium">Automatic resolution</span>
+            <div className="flex items-center gap-2">
+              <button
+                type="button"
+                onClick={() => setModalOpen(false)}
+                className="px-4 py-2 text-xs font-semibold text-slate-600 hover:bg-slate-200/60 rounded-xl transition-colors cursor-pointer"
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                onClick={handleCreateAssignment}
+                disabled={
+                  saving ||
+                  resolving ||
+                  !formSubject ||
+                  resolution?.status === 'ALREADY_ASSIGNED'
+                }
+                className="inline-flex items-center gap-1.5 px-5 py-2 text-xs font-bold text-white bg-[#3431B7] hover:bg-[#282694] disabled:opacity-50 disabled:cursor-not-allowed rounded-xl transition-colors shadow-xs cursor-pointer"
+              >
+                <Sparkles className="w-3.5 h-3.5" />
+                <span>
+                  {saving
+                    ? 'Confirming...'
+                    : resolution?.status === 'ALREADY_ASSIGNED'
+                    ? 'Already Assigned'
+                    : 'Confirm & Assign'}
+                </span>
+              </button>
             </div>
-            <p className="text-xs text-slate-500 mb-4">
-              Select Staff + Class to automatically resolve curriculum course & weekly teaching hours.
-            </p>
+          </>
+        }
+      >
+        <div className="space-y-4">
+          <p className="text-xs text-slate-500">
+            Select Staff + Class to automatically resolve curriculum course & weekly teaching hours.
+          </p>
 
-            {modalError && (
-              <div className="mb-4 p-3 bg-rose-50 border border-rose-200 rounded-lg text-xs text-rose-700 font-medium">
-                {modalError}
-              </div>
-            )}
+          {modalError && (
+            <div className="p-3 bg-rose-50 border border-rose-200 rounded-xl text-xs text-rose-700 font-medium flex items-center gap-2">
+              <AlertTriangle className="w-4 h-4 shrink-0" />
+              <span>{modalError}</span>
+            </div>
+          )}
 
-            <form onSubmit={handleCreateAssignment} className="space-y-4">
-              <div>
-                <label className="block text-xs font-semibold uppercase tracking-wider text-slate-700 mb-1">
-                  1. Target Class Section
-                </label>
-                <select
-                  value={formClass}
-                  onChange={(e) => {
-                    const newClassId = e.target.value;
-                    setFormClass(newClassId);
-                    const cls = classes.find(c => c.classId === newClassId);
-                    const sems = cls ? getSemestersForYear(cls.yearOfStudy) : ['Semester 1', 'Semester 2'];
-                    const defaultSem = sems[0] || 'Semester 1';
-                    setFormSemester(defaultSem);
-                    triggerResolution(newClassId, formStaff, defaultSem);
-                  }}
-                  required
-                  className="w-full px-3 py-2 text-sm border border-slate-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-brand-500 bg-white"
-                >
-                  {classes.map(c => (
-                    <option key={c.classId} value={c.classId}>
-                      {c.yearOfStudy} — Section {c.section} ({c.academicYear})
+          <form onSubmit={handleCreateAssignment} className="space-y-4">
+            <div>
+              <label className="block text-xs font-semibold text-slate-700 mb-1">
+                1. Target class section *
+              </label>
+              <select
+                value={formClass}
+                onChange={(e) => {
+                  const newClassId = e.target.value;
+                  setFormClass(newClassId);
+                  const cls = classes.find(c => c.classId === newClassId);
+                  const sems = cls ? getSemestersForYear(cls.yearOfStudy) : ['Semester 1', 'Semester 2'];
+                  const defaultSem = sems[0] || 'Semester 1';
+                  setFormSemester(defaultSem);
+                  triggerResolution(newClassId, formStaff, defaultSem);
+                }}
+                required
+                className="w-full px-3 py-2 text-xs border border-slate-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-[#3431B7]/20 focus:border-[#3431B7] bg-white font-medium"
+              >
+                {classes.map(c => (
+                  <option key={c.classId} value={c.classId}>
+                    {c.yearOfStudy} — Section {c.section} ({c.academicYear})
+                  </option>
+                ))}
+              </select>
+            </div>
+
+            <div>
+              <label className="block text-xs font-semibold text-slate-700 mb-1">
+                Target semester *
+              </label>
+              <select
+                value={formSemester}
+                onChange={(e) => {
+                  setFormSemester(e.target.value);
+                  triggerResolution(formClass, formStaff, e.target.value);
+                }}
+                className="w-full px-3 py-2 text-xs border border-slate-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-[#3431B7]/20 focus:border-[#3431B7] bg-white font-medium"
+              >
+                {(() => {
+                  const cls = classes.find(c => c.classId === formClass);
+                  const sems = cls ? getSemestersForYear(cls.yearOfStudy) : ['Semester 1', 'Semester 2'];
+                  return sems.map(s => (
+                    <option key={s} value={s}>{s}</option>
+                  ));
+                })()}
+              </select>
+            </div>
+
+            <div>
+              <label className="block text-xs font-semibold text-slate-700 mb-1">
+                2. Faculty member *
+              </label>
+              <select
+                value={formStaff}
+                onChange={(e) => {
+                  setFormStaff(e.target.value);
+                  triggerResolution(formClass, e.target.value);
+                }}
+                required
+                className="w-full px-3 py-2 text-xs border border-slate-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-[#3431B7]/20 focus:border-[#3431B7] bg-white font-medium"
+              >
+                <optgroup label="Department Faculty">
+                  {staffList.map(st => (
+                    <option key={st.memberId} value={st.memberId}>
+                      {st.displayName} ({st.memberId})
                     </option>
                   ))}
-                </select>
-              </div>
-
-              <div>
-                <label className="block text-xs font-semibold uppercase tracking-wider text-slate-700 mb-1">
-                  Target Semester
-                </label>
-                <select
-                  value={formSemester}
-                  onChange={(e) => {
-                    setFormSemester(e.target.value);
-                    triggerResolution(formClass, formStaff, e.target.value);
-                  }}
-                  className="w-full px-3 py-2 text-sm border border-slate-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-brand-500 bg-white"
-                >
-                  {(() => {
-                    const cls = classes.find(c => c.classId === formClass);
-                    const sems = cls ? getSemestersForYear(cls.yearOfStudy) : ['Semester 1', 'Semester 2'];
-                    return sems.map(s => (
-                      <option key={s} value={s}>{s}</option>
-                    ));
-                  })()}
-                </select>
-              </div>
-
-              <div>
-                <label className="block text-xs font-semibold uppercase tracking-wider text-slate-700 mb-1">
-                  2. Faculty Member
-                </label>
-                <select
-                  value={formStaff}
-                  onChange={(e) => {
-                    setFormStaff(e.target.value);
-                    triggerResolution(formClass, e.target.value);
-                  }}
-                  required
-                  className="w-full px-3 py-2 text-sm border border-slate-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-brand-500 bg-white"
-                >
-                  <optgroup label="Department Faculty">
-                    {staffList.map(st => (
-                      <option key={st.memberId} value={st.memberId}>
-                        {st.displayName} ({st.memberId})
-                      </option>
-                    ))}
+                </optgroup>
+                {allGlobalStaff.filter(s => !staffList.some(ds => ds.memberId === s.memberId)).length > 0 && (
+                  <optgroup label="Cross-Department Faculty">
+                    {allGlobalStaff
+                      .filter(s => !staffList.some(ds => ds.memberId === s.memberId))
+                      .map(st => (
+                        <option key={st.memberId} value={st.memberId}>
+                          {st.displayName} ({st.memberId}) — Cross-Dept Link
+                        </option>
+                      ))}
                   </optgroup>
-                  {allGlobalStaff.filter(s => !staffList.some(ds => ds.memberId === s.memberId)).length > 0 && (
-                    <optgroup label="Cross-Department Faculty">
-                      {allGlobalStaff
-                        .filter(s => !staffList.some(ds => ds.memberId === s.memberId))
-                        .map(st => (
-                          <option key={st.memberId} value={st.memberId}>
-                            {st.displayName} ({st.memberId}) — Cross-Dept Link
-                          </option>
-                        ))}
-                    </optgroup>
-                  )}
-                </select>
-              </div>
-
-              {/* Automatic Subject Resolution Card */}
-              <div className="pt-2">
-                <label className="block text-xs font-semibold uppercase tracking-wider text-slate-700 mb-1.5">
-                  3. Resolved Curriculum Course & Hours
-                </label>
-
-                {resolving && (
-                  <div className="p-4 rounded-xl border border-slate-200 bg-slate-50 flex items-center justify-center gap-2 text-xs text-slate-500">
-                    <Sparkles className="w-4 h-4 text-brand-600 animate-spin" />
-                    <span>Resolving class curriculum and staff mappings...</span>
-                  </div>
                 )}
+              </select>
+            </div>
 
-                {!resolving && resolution && (
-                  <>
-                    {/* Case 1: Exactly One Matching Subject */}
-                    {resolution.status === 'SINGLE_MATCH' && resolution.selectedSubject && (
-                      <div className="p-4 rounded-xl border border-emerald-300 bg-emerald-50/70 text-emerald-950 space-y-2">
-                        <div className="flex items-center justify-between">
-                          <div className="flex items-center gap-1.5 font-bold text-sm text-emerald-900">
-                            <CheckCircle2 className="w-4 h-4 text-emerald-600 shrink-0" />
-                            <span>Auto-Resolved Subject</span>
-                          </div>
-                          <span className="px-2 py-0.5 rounded text-[11px] font-bold bg-emerald-600 text-white">
-                            Authoritative Match
-                          </span>
+            {/* Automatic Subject Resolution Card */}
+            <div className="pt-2">
+              <label className="block text-xs font-semibold uppercase tracking-wider text-slate-700 mb-1.5">
+                3. Resolved Curriculum Course & Hours
+              </label>
+
+              {resolving && (
+                <div className="p-4 rounded-2xl border border-slate-200 bg-slate-50 flex items-center justify-center gap-2 text-xs text-slate-500">
+                  <Sparkles className="w-4 h-4 text-[#3431B7] animate-spin" />
+                  <span>Resolving class curriculum and staff mappings...</span>
+                </div>
+              )}
+
+              {!resolving && resolution && (
+                <>
+                  {/* Case 1: Exactly One Matching Subject */}
+                  {resolution.status === 'SINGLE_MATCH' && resolution.selectedSubject && (
+                    <div className="p-4 rounded-2xl border border-emerald-300 bg-emerald-50/70 text-emerald-950 space-y-2">
+                      <div className="flex items-center justify-between">
+                        <div className="flex items-center gap-1.5 font-bold text-xs text-emerald-900">
+                          <CheckCircle2 className="w-4 h-4 text-emerald-600 shrink-0" />
+                          <span>Auto-Resolved Subject</span>
                         </div>
-                        <div className="pt-1">
-                          <p className="font-bold text-base text-slate-900">
-                            {resolution.selectedSubject.name}
-                          </p>
-                          <div className="flex flex-wrap items-center gap-3 mt-1 text-xs text-slate-600 font-medium">
-                            <span className="font-mono font-bold text-brand-700 bg-white px-2 py-0.5 rounded border border-brand-200">
-                              {resolution.selectedSubject.code}
-                            </span>
-                            <span>Type: <strong className="text-slate-800">{resolution.selectedSubject.type}</strong></span>
-                            <span>Weekly Load: <strong className="text-slate-800">{resolution.selectedSubject.weeklyHours} hrs/week</strong></span>
-                          </div>
-                        </div>
+                        <span className="px-2 py-0.5 rounded text-[11px] font-bold bg-emerald-600 text-white">
+                          Authoritative Match
+                        </span>
                       </div>
-                    )}
-
-                    {/* Case 2: Multiple Matching Subjects */}
-                    {resolution.status === 'MULTIPLE_MATCHES' && (
-                      <div className="p-4 rounded-xl border border-blue-300 bg-blue-50/70 text-blue-950 space-y-2.5">
-                        <div className="flex items-center justify-between">
-                          <div className="flex items-center gap-1.5 font-bold text-xs text-blue-900">
-                            <Layers className="w-4 h-4 text-blue-600" />
-                            <span>Multiple Mappings Found ({resolution.matchingSubjects.length})</span>
-                          </div>
-                          <span className="text-[11px] text-blue-700 font-medium">Select course to assign:</span>
-                        </div>
-                        <div className="space-y-1.5">
-                          {resolution.matchingSubjects.map(s => {
-                            const isSelected = formSubject === s.subjectId;
-                            return (
-                              <div
-                                key={s.subjectId}
-                                onClick={() => {
-                                  setFormSubject(s.subjectId);
-                                  setFormHours(s.weeklyHours);
-                                }}
-                                className={`p-2.5 rounded-lg border text-xs transition-all cursor-pointer flex items-center justify-between ${
-                                  isSelected
-                                    ? 'bg-white border-brand-600 shadow-2xs font-semibold text-slate-900'
-                                    : 'bg-white/60 border-slate-200 hover:bg-white text-slate-700'
-                                }`}
-                              >
-                                <div>
-                                  <span className="font-mono font-bold text-brand-700 mr-2">{s.code}</span>
-                                  <span>{s.name}</span>
-                                </div>
-                                <span className="font-medium text-slate-500">
-                                  {s.type} • {s.weeklyHours}h
-                                </span>
-                              </div>
-                            );
-                          })}
-                        </div>
-                      </div>
-                    )}
-
-                    {/* Case 3: No Matching Subject */}
-                    {resolution.status === 'NO_MATCH' && (
-                      <div className="p-4 rounded-xl border border-amber-300 bg-amber-50/70 text-amber-950 space-y-2.5">
-                        <div className="flex items-center gap-1.5 font-bold text-xs text-amber-900">
-                          <AlertCircle className="w-4 h-4 text-amber-600 shrink-0" />
-                          <span>No Active Mapping in This Curriculum</span>
-                        </div>
-                        <p className="text-[11px] text-amber-800">
-                          Faculty member has not yet been assigned to a course in this class curriculum. Select from the available class courses to establish the mapping:
+                      <div className="pt-1">
+                        <p className="font-bold text-sm text-slate-900">
+                          {resolution.selectedSubject.name}
                         </p>
-                        <div>
-                          <select
-                            value={formSubject}
-                            onChange={(e) => {
-                              setFormSubject(e.target.value);
-                              const s = resolution.curriculumSubjects.find(sub => sub.subjectId === e.target.value);
-                              if (s) setFormHours(s.weeklyHours);
-                            }}
-                            className="w-full px-3 py-2 text-xs border border-amber-300 rounded-lg bg-white font-medium focus:outline-none focus:ring-2 focus:ring-brand-500"
-                          >
-                            <option value="">-- Choose Curriculum Course to Map --</option>
-                            {resolution.curriculumSubjects.map(s => (
-                              <option key={s.subjectId} value={s.subjectId}>
-                                {s.code} — {s.name} ({s.type}, {s.weeklyHours}h)
-                              </option>
-                            ))}
-                          </select>
+                        <div className="flex flex-wrap items-center gap-3 mt-1 text-xs text-slate-600 font-medium">
+                          <span className="font-mono font-bold text-[#3431B7] bg-white px-2 py-0.5 rounded border border-indigo-200">
+                            {resolution.selectedSubject.code}
+                          </span>
+                          <span>Type: <strong className="text-slate-800">{resolution.selectedSubject.type}</strong></span>
+                          <span>Weekly Load: <strong className="text-slate-800">{resolution.selectedSubject.weeklyHours} hrs/week</strong></span>
                         </div>
                       </div>
-                    )}
+                    </div>
+                  )}
 
-                    {/* Case 4: Already Assigned */}
-                    {resolution.status === 'ALREADY_ASSIGNED' && (
-                      <div className="p-4 rounded-xl border border-slate-300 bg-slate-100 text-slate-800 flex items-start gap-2.5 text-xs">
-                        <AlertTriangle className="w-4 h-4 text-amber-600 shrink-0 mt-0.5" />
-                        <div>
-                          <p className="font-bold text-slate-900">Assignment Already Exists</p>
-                          <p className="text-slate-600 mt-0.5">{resolution.message}</p>
+                  {/* Case 2: Multiple Matching Subjects */}
+                  {resolution.status === 'MULTIPLE_MATCHES' && (
+                    <div className="p-4 rounded-2xl border border-blue-300 bg-blue-50/70 text-blue-950 space-y-2.5">
+                      <div className="flex items-center justify-between">
+                        <div className="flex items-center gap-1.5 font-bold text-xs text-blue-900">
+                          <Layers className="w-4 h-4 text-blue-600" />
+                          <span>Multiple Mappings Found ({resolution.matchingSubjects.length})</span>
                         </div>
+                        <span className="text-[11px] text-blue-700 font-medium">Select course:</span>
                       </div>
-                    )}
-                  </>
-                )}
-              </div>
+                      <div className="space-y-1.5">
+                        {resolution.matchingSubjects.map(s => {
+                          const isSelected = formSubject === s.subjectId;
+                          return (
+                            <div
+                              key={s.subjectId}
+                              onClick={() => {
+                                setFormSubject(s.subjectId);
+                                setFormHours(s.weeklyHours);
+                              }}
+                              className={`p-2.5 rounded-xl border text-xs transition-all cursor-pointer flex items-center justify-between ${
+                                isSelected
+                                  ? 'bg-white border-[#3431B7] shadow-xs font-semibold text-slate-900 ring-1 ring-[#3431B7]'
+                                  : 'bg-white/60 border-slate-200 hover:bg-white text-slate-700'
+                              }`}
+                            >
+                              <div>
+                                <span className="font-mono font-bold text-[#3431B7] mr-2">{s.code}</span>
+                                <span>{s.name}</span>
+                              </div>
+                              <span className="font-medium text-slate-500">
+                                {s.type} • {s.weeklyHours}h
+                              </span>
+                            </div>
+                          );
+                        })}
+                      </div>
+                    </div>
+                  )}
 
-              <div className="flex justify-end gap-3 pt-3 border-t border-slate-100">
+                  {/* Case 3: No Matching Subject */}
+                  {resolution.status === 'NO_MATCH' && (
+                    <div className="p-4 rounded-2xl border border-amber-300 bg-amber-50/70 text-amber-950 space-y-2.5">
+                      <div className="flex items-center gap-1.5 font-bold text-xs text-amber-900">
+                        <AlertCircle className="w-4 h-4 text-amber-600 shrink-0" />
+                        <span>No Active Mapping in This Curriculum</span>
+                      </div>
+                      <p className="text-[11px] text-amber-800">
+                        Faculty member has not yet been assigned to a course in this class curriculum. Select from the available class courses to establish the mapping:
+                      </p>
+                      <div>
+                        <select
+                          value={formSubject}
+                          onChange={(e) => {
+                            setFormSubject(e.target.value);
+                            const s = resolution.curriculumSubjects.find(sub => sub.subjectId === e.target.value);
+                            if (s) setFormHours(s.weeklyHours);
+                          }}
+                          className="w-full px-3 py-2 text-xs border border-amber-300 rounded-xl bg-white font-medium focus:outline-none focus:ring-2 focus:ring-[#3431B7]"
+                        >
+                          <option value="">-- Choose Curriculum Course to Map --</option>
+                          {resolution.curriculumSubjects.map(s => (
+                            <option key={s.subjectId} value={s.subjectId}>
+                              {s.code} — {s.name} ({s.type}, {s.weeklyHours}h)
+                            </option>
+                          ))}
+                        </select>
+                      </div>
+                    </div>
+                  )}
+
+                  {/* Case 4: Already Assigned */}
+                  {resolution.status === 'ALREADY_ASSIGNED' && (
+                    <div className="p-4 rounded-2xl border border-slate-300 bg-slate-100 text-slate-800 flex items-start gap-2.5 text-xs">
+                      <AlertTriangle className="w-4 h-4 text-amber-600 shrink-0 mt-0.5" />
+                      <div>
+                        <p className="font-bold text-slate-900">Assignment Already Exists</p>
+                        <p className="text-slate-600 mt-0.5">{resolution.message}</p>
+                      </div>
+                    </div>
+                  )}
+                </>
+              )}
+            </div>
+          </form>
+        </div>
+      </Modal>
+
+      {/* Reassign Faculty Modal Dialog */}
+      {reassignTargetAsgn && (
+        <Modal
+          isOpen={reassignModalOpen}
+          onClose={() => {
+            setReassignModalOpen(false);
+            setReassignTargetAsgn(null);
+          }}
+          title="Reassign Faculty Member"
+          badge="Curriculum Reassignment"
+          icon={<ArrowRightLeft className="w-5 h-5 text-white" />}
+          maxWidth="lg"
+          footer={
+            <>
+              <span className="text-xs text-slate-400 font-medium">In-place slot update</span>
+              <div className="flex items-center gap-2">
                 <button
                   type="button"
-                  onClick={() => setModalOpen(false)}
-                  className="px-4 py-2 text-sm font-semibold text-slate-600 hover:bg-slate-100 rounded-lg transition-colors cursor-pointer"
+                  onClick={() => {
+                    setReassignModalOpen(false);
+                    setReassignTargetAsgn(null);
+                  }}
+                  className="px-4 py-2 text-xs font-semibold text-slate-600 hover:bg-slate-200/60 rounded-xl transition-colors cursor-pointer"
                 >
                   Cancel
                 </button>
                 <button
-                  type="submit"
-                  disabled={
-                    saving ||
-                    resolving ||
-                    !formSubject ||
-                    resolution?.status === 'ALREADY_ASSIGNED'
-                  }
-                  className="inline-flex items-center gap-1.5 px-4 py-2 text-sm font-semibold text-white bg-brand-600 hover:bg-brand-700 disabled:opacity-50 disabled:cursor-not-allowed rounded-lg transition-colors shadow-xs cursor-pointer"
+                  type="button"
+                  onClick={handleConfirmReassign}
+                  disabled={saving || !reassignNewMemberId || reassignNewMemberId === reassignTargetAsgn.memberId}
+                  className="inline-flex items-center gap-1.5 px-5 py-2 text-xs font-bold text-white bg-amber-600 hover:bg-amber-700 disabled:opacity-50 disabled:cursor-not-allowed rounded-xl transition-colors shadow-xs cursor-pointer"
                 >
-                  <Sparkles className="w-4 h-4" />
-                  <span>
-                    {saving
-                      ? 'Confirming Assignment...'
-                      : resolution?.status === 'ALREADY_ASSIGNED'
-                      ? 'Already Assigned'
-                      : 'Confirm & Create Assignment'}
-                  </span>
+                  <ArrowRightLeft className="w-3.5 h-3.5" />
+                  <span>{saving ? 'Reassigning...' : 'Confirm Reassignment'}</span>
                 </button>
               </div>
-            </form>
-          </div>
-        </div>
-      )}
-
-      {/* Reassign Faculty Modal Dialog */}
-      {reassignModalOpen && reassignTargetAsgn && (
-        <div className="fixed inset-0 bg-slate-900/40 backdrop-blur-xs flex items-center justify-center p-4 z-50">
-          <div className="bg-white rounded-2xl max-w-lg w-full p-6 shadow-xl border border-slate-100 animate-in fade-in zoom-in-95 duration-100">
-            <div className="flex items-center gap-2 mb-1">
-              <div className="w-8 h-8 rounded-lg bg-amber-50 text-amber-600 flex items-center justify-center">
-                <ArrowRightLeft className="w-4 h-4" />
-              </div>
-              <h3 className="text-lg font-bold text-slate-900">
-                Reassign Faculty Member
-              </h3>
-            </div>
-            <p className="text-xs text-slate-500 mb-4">
+            </>
+          }
+        >
+          <div className="space-y-4">
+            <p className="text-xs text-slate-500">
               Replace the faculty member assigned to this curriculum slot without affecting subject or class identity.
             </p>
 
             {modalError && (
-              <div className="mb-4 p-3 bg-rose-50 border border-rose-200 rounded-lg text-xs text-rose-700 font-medium">
+              <div className="p-3 bg-rose-50 border border-rose-200 rounded-xl text-xs text-rose-700 font-medium">
                 {modalError}
               </div>
             )}
 
             <form onSubmit={handleConfirmReassign} className="space-y-4">
-              <div className="p-3 rounded-xl bg-slate-50 border border-slate-200 text-xs space-y-1.5">
+              <div className="p-3.5 rounded-2xl bg-slate-50 border border-slate-200 text-xs space-y-2">
                 <div className="flex justify-between">
                   <span className="text-slate-500">Class Section:</span>
                   <span className="font-bold text-slate-800">
@@ -698,7 +732,7 @@ export default function AssignmentsPage() {
                 </div>
                 <div className="flex justify-between">
                   <span className="text-slate-500">Currently Assigned:</span>
-                  <span className="font-bold text-brand-700">
+                  <span className="font-bold text-[#3431B7]">
                     {(() => {
                       const st = allGlobalStaff.find(s => s.memberId === reassignTargetAsgn.memberId) || staffList.find(s => s.memberId === reassignTargetAsgn.memberId);
                       return `${st?.displayName || reassignTargetAsgn.memberId} (${reassignTargetAsgn.memberId})`;
@@ -714,7 +748,7 @@ export default function AssignmentsPage() {
                 <select
                   value={reassignNewMemberId}
                   onChange={(e) => setReassignNewMemberId(e.target.value)}
-                  className="w-full px-3 py-2 text-sm border border-slate-300 rounded-lg bg-white font-medium focus:outline-none focus:ring-2 focus:ring-brand-500"
+                  className="w-full px-3 py-2 text-xs border border-slate-200 rounded-xl bg-white font-medium focus:outline-none focus:ring-2 focus:ring-[#3431B7]/20 focus:border-[#3431B7]"
                 >
                   <optgroup label="Department Faculty">
                     {staffList.filter(st => st.memberId !== reassignTargetAsgn.memberId).map(st => (
@@ -743,30 +777,9 @@ export default function AssignmentsPage() {
                   Reassignment updates the active teaching slot in-place. Previously published timetables remain immutable in history.
                 </span>
               </div>
-
-              <div className="flex justify-end gap-3 pt-3 border-t border-slate-100">
-                <button
-                  type="button"
-                  onClick={() => {
-                    setReassignModalOpen(false);
-                    setReassignTargetAsgn(null);
-                  }}
-                  className="px-4 py-2 text-sm font-semibold text-slate-600 hover:bg-slate-100 rounded-lg transition-colors cursor-pointer"
-                >
-                  Cancel
-                </button>
-                <button
-                  type="submit"
-                  disabled={saving || !reassignNewMemberId || reassignNewMemberId === reassignTargetAsgn.memberId}
-                  className="inline-flex items-center gap-1.5 px-4 py-2 text-sm font-semibold text-white bg-amber-600 hover:bg-amber-700 disabled:opacity-50 disabled:cursor-not-allowed rounded-lg transition-colors shadow-xs cursor-pointer"
-                >
-                  <ArrowRightLeft className="w-4 h-4" />
-                  <span>{saving ? 'Reassigning...' : 'Confirm Reassignment'}</span>
-                </button>
-              </div>
             </form>
           </div>
-        </div>
+        </Modal>
       )}
     </div>
   );

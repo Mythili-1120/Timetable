@@ -39,8 +39,13 @@ import {
   AlertTriangle,
   Trash2,
   MoreHorizontal,
-  Info
+  Info,
+  Lock,
+  Building2,
+  Check,
+  User
 } from 'lucide-react';
+import Modal from '../../../components/Modal';
 
 function getStaffAvatarLetters(staff: Staff): string {
   if (staff.staffName && staff.initials) {
@@ -739,265 +744,319 @@ export default function StaffPage() {
         Showing {filteredStaff.length} of {staffList.length} staff members
       </p>
 
-      {/* Add / Edit Staff Modal */}
-      {modalOpen && (
-        <div className="fixed inset-0 bg-slate-900/40 backdrop-blur-xs flex items-center justify-center p-4 z-50 overflow-y-auto">
-          <div className="bg-white rounded-2xl max-w-lg w-full p-6 shadow-xl border border-slate-100 animate-in fade-in zoom-in-95 duration-100 my-8">
-            <h3 className="text-lg font-bold text-slate-900 mb-1">
-              {editingStaff ? `Edit Staff — ${editingStaff.memberId}` : 'Add New Staff Member'}
-            </h3>
-            <p className="text-xs text-slate-500 mb-4">
-              Permanent Member ID (FAC-XXXXXX) is unique and immutable across all college departments.
-            </p>
-
-            {error && (
-              <div className="mb-4 p-3 bg-rose-50 border border-rose-200 rounded-lg text-xs text-rose-700 font-medium">
-                {error}
-              </div>
-            )}
-
-            {departments.length === 0 && (
-              <div className="mb-4 p-3 bg-amber-50 border border-amber-200 rounded-lg text-xs text-amber-800 font-medium">
-                No active departments found. Please create a Department in Department Master before adding faculty.
-              </div>
-            )}
-
-            <form onSubmit={handleSave} className="space-y-4">
-              {/* Full Name and Initials */}
-              <div className="grid grid-cols-3 gap-3">
-                <div className="col-span-2">
-                  <label className="block text-xs font-semibold uppercase tracking-wider text-slate-700 mb-1">
-                    Full Name *
-                  </label>
-                  <input
-                    type="text"
-                    required
-                    placeholder="e.g. Suresh, Priya, Ram"
-                    value={name}
-                    onChange={(e) => setName(e.target.value)}
-                    className="w-full px-3 py-2 text-sm border border-slate-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-brand-500"
-                  />
-                </div>
-                <div>
-                  <label className="block text-xs font-semibold uppercase tracking-wider text-slate-700 mb-1">
-                    Initials
-                  </label>
-                  <input
-                    type="text"
-                    placeholder="e.g. R, M, K"
-                    value={initials}
-                    onChange={(e) => setInitials(e.target.value)}
-                    className="w-full px-3 py-2 text-sm border border-slate-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-brand-500 uppercase"
-                  />
-                </div>
-              </div>
-
-              {/* Phone Number & Email */}
-              <div className="grid grid-cols-2 gap-3">
-                <div>
-                  <label className="block text-xs font-semibold uppercase tracking-wider text-slate-700 mb-1">
-                    Phone Number
-                  </label>
-                  <div className="relative">
-                    <Phone className="w-4 h-4 absolute left-3 top-2.5 text-slate-400" />
-                    <input
-                      type="tel"
-                      placeholder="e.g. 9876543210"
-                      value={phone}
-                      onChange={(e) => setPhone(e.target.value)}
-                      className="w-full pl-9 pr-3 py-2 text-sm border border-slate-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-brand-500 font-mono"
-                    />
-                  </div>
-                  <p className="text-[10px] text-slate-500 mt-1">10-digit mobile or +91 format</p>
-                </div>
-                <div>
-                  <label className="block text-xs font-semibold uppercase tracking-wider text-slate-700 mb-1">
-                    Email Address
-                  </label>
-                  <input
-                    type="email"
-                    placeholder="faculty@ssmiet.ac.in"
-                    value={email}
-                    onChange={(e) => setEmail(e.target.value)}
-                    className="w-full px-3 py-2 text-sm border border-slate-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-brand-500"
-                  />
-                </div>
-              </div>
-
-              {/* Department & Designation */}
-              <div className="grid grid-cols-2 gap-3">
-                <div>
-                  <label className="block text-xs font-semibold uppercase tracking-wider text-slate-700 mb-1">
-                    Primary Department *
-                  </label>
-                  <select
-                    value={primaryDept}
-                    onChange={(e) => setPrimaryDept(e.target.value)}
-                    className="w-full px-3 py-2 text-sm border border-slate-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-brand-500 bg-white"
-                  >
-                    {departments.map(d => (
-                      <option key={d.departmentId} value={d.departmentId}>
-                        {d.code} — {d.name}
-                      </option>
-                    ))}
-                  </select>
-                </div>
-                <div>
-                  <label className="block text-xs font-semibold uppercase tracking-wider text-slate-700 mb-1">
-                    Designation
-                  </label>
-                  <input
-                    type="text"
-                    value={designation}
-                    onChange={(e) => setDesignation(e.target.value)}
-                    className="w-full px-3 py-2 text-sm border border-slate-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-brand-500"
-                  />
-                </div>
-              </div>
-
-              {/* Action Buttons */}
-              <div className="flex justify-end gap-3 pt-3 border-t border-slate-100">
-                <button
-                  type="button"
-                  onClick={() => setModalOpen(false)}
-                  className="px-4 py-2 text-sm font-semibold text-slate-600 hover:bg-slate-100 rounded-lg transition-colors cursor-pointer"
-                >
-                  Cancel
-                </button>
-                <button
-                  type="submit"
-                  disabled={saving || departments.length === 0}
-                  className="px-4 py-2 text-sm font-semibold text-white bg-brand-600 hover:bg-brand-700 disabled:opacity-50 disabled:cursor-not-allowed rounded-lg transition-colors cursor-pointer"
-                >
-                  {saving ? 'Saving...' : editingStaff ? 'Update Staff Member' : 'Generate ID & Save'}
-                </button>
-              </div>
-            </form>
-          </div>
-        </div>
-      )}
-
-      {/* Multi-Department Link Modal */}
-      {linkModalOpen && selectedStaffForLink && (
-        <div className="fixed inset-0 bg-slate-900/40 backdrop-blur-xs flex items-center justify-center p-4 z-50">
-          <div className="bg-white rounded-2xl max-w-md w-full p-6 shadow-xl border border-slate-100">
-            <h3 className="text-lg font-bold text-slate-900 mb-1">
-              Link Staff to Additional Department
-            </h3>
-            <p className="text-xs text-slate-500 mb-4">
-              Allows <span className="font-semibold text-slate-800">{selectedStaffForLink.displayName}</span> ({selectedStaffForLink.memberId}) to teach in another department without creating a duplicate record.
-            </p>
-
-            <form onSubmit={handleLinkDepartment} className="space-y-4">
-              <div>
-                <label className="block text-xs font-semibold uppercase tracking-wider text-slate-700 mb-1">
-                  Select Department to Link
-                </label>
-                <select
-                  value={additionalDept}
-                  onChange={(e) => setAdditionalDept(e.target.value)}
-                  required
-                  className="w-full px-3 py-2 text-sm border border-slate-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-brand-500 bg-white"
-                >
-                  <option value="">-- Choose Department --</option>
-                  {departments
-                    .filter(d => d.departmentId !== selectedStaffForLink.primaryDepartmentId)
-                    .map(d => (
-                      <option key={d.departmentId} value={d.departmentId}>
-                        {d.code} — {d.name}
-                      </option>
-                    ))}
-                </select>
-              </div>
-
-              <div className="flex justify-end gap-3 pt-3 border-t border-slate-100">
-                <button
-                  type="button"
-                  onClick={() => setLinkModalOpen(false)}
-                  className="px-4 py-2 text-sm font-semibold text-slate-600 hover:bg-slate-100 rounded-lg transition-colors cursor-pointer"
-                >
-                  Cancel
-                </button>
-                <button
-                  type="submit"
-                  disabled={saving || !additionalDept}
-                  className="px-4 py-2 text-sm font-semibold text-white bg-indigo-600 hover:bg-indigo-700 disabled:opacity-50 disabled:cursor-not-allowed rounded-lg transition-colors cursor-pointer"
-                >
-                  {saving ? 'Linking...' : 'Establish Department Link'}
-                </button>
-              </div>
-            </form>
-          </div>
-        </div>
-      )}
-
-      {/* Permanent Staff Deletion Confirmation Modal */}
-      {deleteConfirmOpen && staffToDelete && (
-        <div className="fixed inset-0 bg-slate-900/40 backdrop-blur-xs flex items-center justify-center p-4 z-50">
-          <div className="bg-white rounded-2xl max-w-lg w-full p-6 shadow-xl border border-rose-100 animate-in fade-in zoom-in-95 duration-100">
-            <div className="flex items-start gap-3.5 mb-4">
-              <div className="w-10 h-10 rounded-xl bg-rose-50 text-rose-600 flex items-center justify-center shrink-0">
-                <Trash2 className="w-5 h-5" />
-              </div>
-              <div className="flex-1 min-w-0">
-                <h3 className="text-lg font-bold text-slate-900">
-                  Delete Staff: {staffToDelete.displayName}
-                </h3>
-                <p className="text-xs font-mono text-brand-700 font-bold">
-                  Permanent Member ID: {staffToDelete.memberId}
-                </p>
-              </div>
-            </div>
-
-            <div className="p-3.5 bg-amber-50/70 border border-amber-200/80 rounded-xl text-xs text-amber-900 mb-4 leading-relaxed">
-              <span className="font-bold">Permanent Operation Warning: </span>
-              Deleting a staff member permanently removes their profile and department links from Firestore. If this faculty member has active teaching assignments, draft timetable slots, or published timetable history, permanent deletion will be prevented to protect institutional academic records.
-            </div>
-
-            {deleteError && (
-              <div className="mb-4 p-3.5 bg-rose-50 border border-rose-200 rounded-xl text-xs text-rose-800 flex items-start gap-2.5">
-                <AlertTriangle className="w-4 h-4 text-rose-600 shrink-0 mt-0.5" />
-                <div className="flex-1 whitespace-pre-line leading-relaxed font-medium">
-                  {deleteError}
-                </div>
-              </div>
-            )}
-
-            <div className="flex justify-end gap-3 pt-3 border-t border-slate-100">
+      {/* 1. ADD / EDIT STAFF MODAL */}
+      <Modal
+        isOpen={modalOpen}
+        onClose={() => setModalOpen(false)}
+        title={editingStaff ? 'Edit Staff Member' : 'Add Staff Member'}
+        badge={editingStaff ? editingStaff.memberId : 'New Member'}
+        icon={
+          editingStaff ? (
+            <span className="font-extrabold text-sm">{editingStaff.initials || editingStaff.displayName.slice(0, 2).toUpperCase()}</span>
+          ) : (
+            <User className="w-5 h-5 text-white" />
+          )
+        }
+        maxWidth="lg"
+        footer={
+          <>
+            <span className="text-[11px] text-slate-400 font-medium">* Required</span>
+            <div className="flex items-center gap-2">
               <button
                 type="button"
-                onClick={() => {
-                  setDeleteConfirmOpen(false);
-                  setStaffToDelete(null);
-                  setDeleteError(null);
-                }}
-                disabled={deleting}
-                className="px-4 py-2 text-xs sm:text-sm font-semibold text-slate-600 hover:bg-slate-100 rounded-xl transition-colors cursor-pointer"
+                onClick={() => setModalOpen(false)}
+                className="px-5 py-2.5 text-xs font-bold text-slate-600 hover:text-slate-900 hover:bg-slate-100 rounded-xl transition-colors cursor-pointer border border-slate-200/80 bg-white shadow-2xs"
               >
                 Cancel
               </button>
               <button
-                type="button"
-                onClick={handleDeleteStaff}
-                disabled={deleting}
-                className="px-5 py-2 text-xs sm:text-sm font-bold text-white bg-rose-600 hover:bg-rose-700 disabled:opacity-50 disabled:cursor-not-allowed rounded-xl transition-colors cursor-pointer shadow-xs inline-flex items-center gap-1.5"
+                type="submit"
+                form="staff-modal-form"
+                disabled={saving || departments.length === 0}
+                className="inline-flex items-center gap-1.5 px-6 py-2.5 text-xs font-bold text-white bg-[#3431B7] hover:bg-[#28229E] disabled:opacity-50 disabled:cursor-not-allowed rounded-xl shadow-xs transition-all cursor-pointer"
               >
-                {deleting ? (
-                  <>
-                    <span className="inline-block w-3.5 h-3.5 border-2 border-white/30 border-t-white rounded-full animate-spin" />
-                    <span>Verifying & Deleting...</span>
-                  </>
-                ) : (
-                  <>
-                    <Trash2 className="w-3.5 h-3.5" />
-                    <span>Confirm Permanent Delete</span>
-                  </>
-                )}
+                <Check className="w-3.5 h-3.5 stroke-[3]" />
+                <span>{saving ? 'Saving...' : editingStaff ? 'Save changes' : 'Add Staff Member'}</span>
               </button>
             </div>
+          </>
+        }
+      >
+        {/* Permanent Member ID Info Banner */}
+        <div className="bg-indigo-50/70 border border-indigo-100/90 rounded-2xl p-4 flex items-center gap-3.5">
+          <div className="w-9 h-9 rounded-xl bg-[#3431B7] text-white flex items-center justify-center shrink-0">
+            <Lock className="w-4 h-4" />
+          </div>
+          <div>
+            <p className="text-xs font-bold text-slate-900">
+              Member ID {editingStaff ? editingStaff.memberId : 'FAC-XXXXXX'} is permanent
+            </p>
+            <p className="text-[11px] text-slate-500 mt-0.5">
+              It is unique and cannot be changed in any department.
+            </p>
           </div>
         </div>
-      )}
+
+        {error && (
+          <div className="p-3 bg-rose-50 border border-rose-200 rounded-xl text-xs text-rose-700 font-medium">
+            {error}
+          </div>
+        )}
+
+        {departments.length === 0 && (
+          <div className="p-3 bg-amber-50 border border-amber-200 rounded-xl text-xs text-amber-800 font-medium">
+            No active departments found. Please create a Department in Department Master before adding faculty.
+          </div>
+        )}
+
+        <form id="staff-modal-form" onSubmit={handleSave} className="space-y-4">
+          {/* Section: BASIC DETAILS */}
+          <div>
+            <span className="text-[10px] font-extrabold uppercase tracking-wider text-slate-400 block mb-2">
+              BASIC DETAILS
+            </span>
+            <div className="grid grid-cols-3 gap-3">
+              <div className="col-span-2">
+                <label className="block text-xs font-bold text-slate-700 mb-1.5">
+                  Full name *
+                </label>
+                <input
+                  type="text"
+                  required
+                  placeholder="e.g. Suresh, Priya, Ram"
+                  value={name}
+                  onChange={(e) => setName(e.target.value)}
+                  className="w-full px-4 py-2.5 rounded-xl border border-slate-200 text-sm font-semibold text-slate-900 bg-white placeholder:text-slate-400 focus:outline-none focus:ring-2 focus:ring-[#3431B7]/20 focus:border-[#3431B7] transition-all"
+                />
+              </div>
+              <div>
+                <label className="block text-xs font-bold text-slate-700 mb-1.5">
+                  Initials
+                </label>
+                <input
+                  type="text"
+                  placeholder="e.g. S, R, M"
+                  value={initials}
+                  onChange={(e) => setInitials(e.target.value)}
+                  className="w-full px-4 py-2.5 rounded-xl border border-slate-200 text-sm font-semibold text-slate-900 bg-white placeholder:text-slate-400 focus:outline-none focus:ring-2 focus:ring-[#3431B7]/20 focus:border-[#3431B7] uppercase transition-all"
+                />
+              </div>
+            </div>
+          </div>
+
+          {/* Section: CONTACT */}
+          <div>
+            <span className="text-[10px] font-extrabold uppercase tracking-wider text-slate-400 block mb-2">
+              CONTACT
+            </span>
+            <div className="grid grid-cols-2 gap-3">
+              <div>
+                <div className="flex items-center gap-1.5 mb-1.5">
+                  <label className="block text-xs font-bold text-slate-700">
+                    Phone number
+                  </label>
+                  {!phone && (
+                    <span className="text-[10px] font-bold text-amber-700 bg-amber-50 border border-amber-200 px-1.5 py-0.2 rounded-md">
+                      Missing
+                    </span>
+                  )}
+                </div>
+                <div className="flex rounded-xl border border-slate-200 overflow-hidden focus-within:ring-2 focus-within:ring-[#3431B7]/20 focus-within:border-[#3431B7] transition-all">
+                  <span className="inline-flex items-center px-3 bg-slate-50 border-r border-slate-200 text-xs font-bold text-slate-500">
+                    +91
+                  </span>
+                  <input
+                    type="tel"
+                    placeholder="9876543210"
+                    value={phone.replace(/^\+91\s*/, '')}
+                    onChange={(e) => setPhone(e.target.value)}
+                    className="w-full px-3 py-2.5 text-sm font-semibold text-slate-900 bg-white placeholder:text-slate-400 focus:outline-none"
+                  />
+                </div>
+                <p className="text-[10px] text-slate-400 font-medium mt-1">10-digit mobile number, or +91 format</p>
+              </div>
+              <div>
+                <label className="block text-xs font-bold text-slate-700 mb-1.5">
+                  Email address
+                </label>
+                <input
+                  type="email"
+                  placeholder="faculty@ssmiet.ac.in"
+                  value={email}
+                  onChange={(e) => setEmail(e.target.value)}
+                  className="w-full px-4 py-2.5 rounded-xl border border-slate-200 text-sm font-semibold text-slate-900 bg-white placeholder:text-slate-400 focus:outline-none focus:ring-2 focus:ring-[#3431B7]/20 focus:border-[#3431B7] transition-all"
+                />
+              </div>
+            </div>
+          </div>
+
+          {/* Section: WORK */}
+          <div>
+            <span className="text-[10px] font-extrabold uppercase tracking-wider text-slate-400 block mb-2">
+              WORK
+            </span>
+            <div className="grid grid-cols-2 gap-3">
+              <div>
+                <label className="block text-xs font-bold text-slate-700 mb-1.5">
+                  Primary department *
+                </label>
+                <select
+                  value={primaryDept}
+                  onChange={(e) => setPrimaryDept(e.target.value)}
+                  className="w-full px-4 py-2.5 rounded-xl border border-slate-200 text-sm font-semibold text-slate-900 bg-white focus:outline-none focus:ring-2 focus:ring-[#3431B7]/20 focus:border-[#3431B7] transition-all cursor-pointer"
+                >
+                  {departments.map(d => (
+                    <option key={d.departmentId} value={d.departmentId}>
+                      {d.code} — {d.name}
+                    </option>
+                  ))}
+                </select>
+              </div>
+              <div>
+                <label className="block text-xs font-bold text-slate-700 mb-1.5">
+                  Designation
+                </label>
+                <input
+                  type="text"
+                  value={designation}
+                  onChange={(e) => setDesignation(e.target.value)}
+                  placeholder="e.g. Assistant Professor"
+                  className="w-full px-4 py-2.5 rounded-xl border border-slate-200 text-sm font-semibold text-slate-900 bg-white placeholder:text-slate-400 focus:outline-none focus:ring-2 focus:ring-[#3431B7]/20 focus:border-[#3431B7] transition-all"
+                />
+              </div>
+            </div>
+          </div>
+        </form>
+      </Modal>
+
+      {/* 2. MULTI-DEPARTMENT LINK MODAL */}
+      <Modal
+        isOpen={Boolean(linkModalOpen && selectedStaffForLink)}
+        onClose={() => setLinkModalOpen(false)}
+        title="Link Staff to Department"
+        badge={selectedStaffForLink?.memberId || ''}
+        icon={<Building2 className="w-5 h-5 text-white" />}
+        maxWidth="md"
+        footer={
+          <div className="flex items-center justify-end gap-2 w-full">
+            <button
+              type="button"
+              onClick={() => setLinkModalOpen(false)}
+              className="px-5 py-2.5 text-xs font-bold text-slate-600 hover:text-slate-900 hover:bg-slate-100 rounded-xl transition-colors cursor-pointer border border-slate-200/80 bg-white shadow-2xs"
+            >
+              Cancel
+            </button>
+            <button
+              type="submit"
+              form="link-dept-form"
+              disabled={saving || !additionalDept}
+              className="inline-flex items-center gap-1.5 px-6 py-2.5 text-xs font-bold text-white bg-[#3431B7] hover:bg-[#28229E] disabled:opacity-50 disabled:cursor-not-allowed rounded-xl shadow-xs transition-all cursor-pointer"
+            >
+              <Check className="w-3.5 h-3.5 stroke-[3]" />
+              <span>{saving ? 'Linking...' : 'Establish Department Link'}</span>
+            </button>
+          </div>
+        }
+      >
+        <div className="bg-indigo-50/70 border border-indigo-100/90 rounded-2xl p-4 flex items-center gap-3.5">
+          <div className="w-9 h-9 rounded-xl bg-[#3431B7] text-white flex items-center justify-center shrink-0">
+            <User className="w-4 h-4" />
+          </div>
+          <div>
+            <p className="text-xs font-bold text-slate-900">
+              {selectedStaffForLink?.displayName} ({selectedStaffForLink?.memberId})
+            </p>
+            <p className="text-[11px] text-slate-500 mt-0.5">
+              Allows this faculty member to teach in another department without creating duplicate records.
+            </p>
+          </div>
+        </div>
+
+        <form id="link-dept-form" onSubmit={handleLinkDepartment} className="space-y-4 pt-1">
+          <div>
+            <label className="block text-xs font-bold text-slate-700 mb-1.5">
+              Select Department to Link *
+            </label>
+            <select
+              value={additionalDept}
+              onChange={(e) => setAdditionalDept(e.target.value)}
+              required
+              className="w-full px-4 py-2.5 rounded-xl border border-slate-200 text-sm font-semibold text-slate-900 bg-white focus:outline-none focus:ring-2 focus:ring-[#3431B7]/20 focus:border-[#3431B7] transition-all cursor-pointer"
+            >
+              <option value="">-- Choose Department --</option>
+              {departments
+                .filter(d => d.departmentId !== selectedStaffForLink?.primaryDepartmentId)
+                .map(d => (
+                  <option key={d.departmentId} value={d.departmentId}>
+                    {d.code} — {d.name}
+                  </option>
+                ))}
+            </select>
+          </div>
+        </form>
+      </Modal>
+
+      {/* 3. PERMANENT STAFF DELETION CONFIRMATION MODAL */}
+      <Modal
+        isOpen={Boolean(deleteConfirmOpen && staffToDelete)}
+        onClose={() => {
+          setDeleteConfirmOpen(false);
+          setStaffToDelete(null);
+          setDeleteError(null);
+        }}
+        title={`Delete Staff: ${staffToDelete?.displayName || ''}`}
+        badge={staffToDelete?.memberId || ''}
+        icon={<Trash2 className="w-5 h-5 text-white" />}
+        maxWidth="lg"
+        footer={
+          <div className="flex items-center justify-end gap-2 w-full">
+            <button
+              type="button"
+              onClick={() => {
+                setDeleteConfirmOpen(false);
+                setStaffToDelete(null);
+                setDeleteError(null);
+              }}
+              disabled={deleting}
+              className="px-5 py-2.5 text-xs font-bold text-slate-600 hover:text-slate-900 hover:bg-slate-100 rounded-xl transition-colors cursor-pointer border border-slate-200/80 bg-white shadow-2xs"
+            >
+              Cancel
+            </button>
+            <button
+              type="button"
+              onClick={handleDeleteStaff}
+              disabled={deleting}
+              className="px-6 py-2.5 text-xs font-bold text-white bg-rose-600 hover:bg-rose-700 disabled:opacity-50 disabled:cursor-not-allowed rounded-xl transition-colors cursor-pointer shadow-xs inline-flex items-center gap-1.5"
+            >
+              {deleting ? (
+                <>
+                  <span className="inline-block w-3.5 h-3.5 border-2 border-white/30 border-t-white rounded-full animate-spin" />
+                  <span>Verifying & Deleting...</span>
+                </>
+              ) : (
+                <>
+                  <Trash2 className="w-3.5 h-3.5" />
+                  <span>Confirm Permanent Delete</span>
+                </>
+              )}
+            </button>
+          </div>
+        }
+      >
+        <div className="p-3.5 bg-amber-50/70 border border-amber-200/80 rounded-2xl text-xs text-amber-900 leading-relaxed">
+          <span className="font-bold">Permanent Operation Warning: </span>
+          Deleting a staff member permanently removes their profile and department links from Firestore. If this faculty member has active teaching assignments, draft timetable slots, or published timetable history, permanent deletion will be prevented to protect institutional academic records.
+        </div>
+
+        {deleteError && (
+          <div className="p-3.5 bg-rose-50 border border-rose-200 rounded-xl text-xs text-rose-800 flex items-start gap-2.5">
+            <AlertTriangle className="w-4 h-4 text-rose-600 shrink-0 mt-0.5" />
+            <div className="flex-1 whitespace-pre-line leading-relaxed font-medium">
+              {deleteError}
+            </div>
+          </div>
+        )}
+      </Modal>
     </div>
   );
 }
