@@ -834,19 +834,7 @@ export async function getGlobalAssignmentCount(): Promise<number> {
 // SUBJECT-WISE STAFF VALIDATION ENGINE
 // ============================================================================
 
-export interface SubjectStaffValidationResult {
-  isValid: boolean;
-  canGenerate: boolean;
-  totalRequiredHours: number;
-  curriculumSubjects: Subject[];
-  assignedSubjects: {
-    subject: Subject;
-    assignment: TeachingAssignment;
-    staff: Staff;
-  }[];
-  missingStaffSubjects: Subject[];
-  blockingErrors: string[];
-}
+export type { SubjectStaffValidationResult };
 
 /**
  * Subject-Wise Staff Validation:
@@ -1042,8 +1030,8 @@ export async function validateSubjectStaffForClass(
     }
   });
 
-  for (const [subjKey, asgnList] of asgnsBySubject.entries()) {
-    const distinctFaculty = Array.from(new Set(asgnList.map(a => a.memberId?.trim()).filter(Boolean)));
+  for (const [subjKey, asgnList] of Array.from(asgnsBySubject.entries())) {
+    const distinctFaculty = Array.from(new Set(asgnList.map((a: TeachingAssignment) => a.memberId?.trim()).filter(Boolean)));
     if (distinctFaculty.length > 1) {
       const matchedSubj = scopedSubjects.find(s => s.subjectId.trim() === subjKey);
       const err: StructuredValidationError = {

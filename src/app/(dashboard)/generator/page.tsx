@@ -5,8 +5,7 @@ import Link from 'next/link';
 import { getAllDepartments, getCachedDepartments } from '../../../lib/services/departmentService';
 import { getAllClasses } from '../../../lib/services/classService';
 import {
-  validateSubjectStaffForClass,
-  SubjectStaffValidationResult
+  validateSubjectStaffForClass
 } from '../../../lib/services/assignmentService';
 import { getAllSubjects, getCachedSubjects, getSemestersForYear } from '../../../lib/services/subjectService';
 import { getAllStaff, getCachedStaff } from '../../../lib/services/staffService';
@@ -29,7 +28,8 @@ import {
   Staff,
   CollegeSettings,
   TimetableSlot,
-  PublishedTimetable
+  PublishedTimetable,
+  SubjectStaffValidationResult
 } from '../../../types';
 import TimetableGrid from '../../../components/TimetableGrid';
 import Modal from '../../../components/Modal';

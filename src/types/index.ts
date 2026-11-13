@@ -6,6 +6,8 @@ export interface PeriodDefinition {
   time: string;
   isBreak: boolean;
   isLunch?: boolean;
+  startTime?: string;
+  endTime?: string;
 }
 
 export interface CollegeSettings {
