@@ -372,17 +372,6 @@ export default function LoginPage() {
               </button>
             </div>
           </form>
-
-          {/* Secure Sign-in Footer Note */}
-          <div className="mt-10 pt-6 border-t border-slate-100">
-            <div className="flex items-center gap-2 text-xs font-bold text-slate-700">
-              <Lock className="w-4 h-4 text-slate-400" />
-              <span>Secure sign-in</span>
-            </div>
-            <p className="text-[11px] text-slate-400 mt-1 leading-relaxed">
-              Only authorised college administrators can enter. Every sign-in is recorded.
-            </p>
-          </div>
         </div>
       </div>
     </div>
